@@ -53,10 +53,28 @@ export interface MediaRoomState {
 
 const mediaRooms = new Map<string, MediaRoomState>();
 
-function extractYouTubeId(url: string): string | null {
-  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
-  const match = url.match(regExp);
-  return (match && match[2].length === 11) ? match[2] : null;
+function extractYouTubeId(url?: string): string | null {
+  if (!url || typeof url !== 'string') return null;
+  const cleanUrl = url.trim();
+
+  // If user pasted just the 11-char ID
+  if (/^[a-zA-Z0-9_-]{11}$/.test(cleanUrl)) {
+    return cleanUrl;
+  }
+
+  // YouTube Shorts: /shorts/<id>
+  const shortsMatch = cleanUrl.match(/(?:shorts\/)([a-zA-Z0-9_-]{11})/);
+  if (shortsMatch && shortsMatch[1]) return shortsMatch[1];
+
+  // Standard youtu.be / watch?v= / embed / music.youtube.com
+  const standardMatch = cleanUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([a-zA-Z0-9_-]{11})/);
+  if (standardMatch && standardMatch[1]) return standardMatch[1];
+
+  // Fallback: ?v= parameter or &v= parameter anywhere in the query string
+  const paramMatch = cleanUrl.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+  if (paramMatch && paramMatch[1]) return paramMatch[1];
+
+  return null;
 }
 
 const onlineSessions = new Map<string, OnlineSession>();
@@ -985,17 +1003,22 @@ io.on('connection', (socket: Socket) => {
     callback?.({ success: true, state });
   });
 
-  socket.on('media:play', ({ channelId, inputUrl }: { channelId: string; inputUrl: string }, callback) => {
+  socket.on('media:play', async ({ channelId, url, inputUrl, title }: { channelId: string; url?: string; inputUrl?: string; title?: string }, callback) => {
     const session = onlineSessions.get(socket.id);
     if (!session) return callback?.({ success: false, error: 'Não autenticado.' });
 
     const db = loadDB();
     const user = db.users.find((u) => u.id === session.userId);
-    if (!user) return;
+    if (!user) return callback?.({ success: false, error: 'Usuário não encontrado.' });
 
-    const videoId = extractYouTubeId(inputUrl);
+    const rawUrl = (url || inputUrl || '').trim();
+    if (!rawUrl) {
+      return callback?.({ success: false, error: 'Cole um link válido do YouTube.' });
+    }
+
+    const videoId = extractYouTubeId(rawUrl);
     if (!videoId) {
-      return callback?.({ success: false, error: 'Link do YouTube inválido. Exemplo: https://www.youtube.com/watch?v=dQw4w9WgXcQ' });
+      return callback?.({ success: false, error: 'Link do YouTube não reconhecido. Ex: https://www.youtube.com/watch?v=dQw4w9WgXcQ' });
     }
 
     let state = mediaRooms.get(channelId);
@@ -1011,12 +1034,26 @@ io.on('connection', (socket: Socket) => {
       mediaRooms.set(channelId, state);
     }
 
+    // Tentar obter o título real do vídeo via oEmbed oficial do YouTube
+    let videoTitle = title || `Vídeo do YouTube (${videoId})`;
+    try {
+      const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+      if (oembedRes.ok) {
+        const oembedData: any = await oembedRes.json();
+        if (oembedData?.title) {
+          videoTitle = oembedData.title;
+        }
+      }
+    } catch (e) {
+      // Ignora erro de rede e usa fallback
+    }
+
     const userName = user.name || (user as any).displayName || 'Membro';
     const trackItem: PlaylistItem = {
       id: Math.random().toString(36).substring(2, 9),
-      url: inputUrl,
+      url: rawUrl,
       videoId,
-      title: `Vídeo do YouTube (${videoId})`,
+      title: videoTitle,
       thumbnailUrl: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
       addedBy: {
         id: user.id,
@@ -1052,7 +1089,7 @@ io.on('connection', (socket: Socket) => {
           userId: 'system',
           userName: '🎵 Janjacord DJ',
           avatarColor: '#10b981',
-          text: `▶️ **${userName}** adicionou: [Assistir no YouTube](https://youtu.be/${videoId})`,
+          text: `▶️ **${userName}** adicionou: [${videoTitle}](https://youtu.be/${videoId})`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         };
         db.messages.push(sysMsg);

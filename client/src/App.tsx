@@ -385,7 +385,7 @@ export const App: React.FC = () => {
   // Media Room Handlers (Watch Together & Music DJ)
   const handlePlayMedia = (url: string, title?: string) => {
     if (!activeChannel) return;
-    socketRef.current?.emit('media:play', { channelId: activeChannel.id, url, title }, (res: any) => {
+    socketRef.current?.emit('media:play', { channelId: activeChannel.id, url, inputUrl: url, title }, (res: any) => {
       if (res?.error) {
         alert(res.error);
       }

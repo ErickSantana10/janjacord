@@ -36,7 +36,7 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
   const [activeTab, setActiveTab] = useState<'queue' | 'chat'>('queue');
   const [urlInput, setUrlInput] = useState('');
   const [chatInput, setChatInput] = useState('');
-  const [isPlayerReady, setIsPlayerReady] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [volume, setVolume] = useState(80);
   const [isMuted, setIsMuted] = useState(false);
   const [playerCurrentTime, setPlayerCurrentTime] = useState(0);
@@ -44,6 +44,7 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
 
   const playerRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const playerContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastVideoIdRef = useRef<string | null>(null);
 
@@ -57,50 +58,100 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
     }
   }, [channelMessages, activeTab]);
 
-  // Load YouTube IFrame API
+  // Load YouTube IFrame API script tag once
   useEffect(() => {
     if (!(window as any).YT) {
       const tag = document.createElement('script');
       tag.src = 'https://www.youtube.com/iframe_api';
       const firstScriptTag = document.getElementsByTagName('script')[0];
-      firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
+      firstScriptTag?.parentNode?.insertBefore(tag, firstScriptTag);
     }
-
-    const checkYT = setInterval(() => {
-      if ((window as any).YT && (window as any).YT.Player) {
-        clearInterval(checkYT);
-        initPlayer();
-      }
-    }, 200);
-
-    return () => clearInterval(checkYT);
   }, []);
 
-  const initPlayer = () => {
-    if (playerRef.current) return;
-    const playerElement = document.getElementById('youtube-media-element');
-    if (!playerElement) return;
+  // Synchronize or initialize player whenever mediaState changes
+  const syncPlayerWithState = (state: MediaRoomState | null) => {
+    if (!state || !state.currentTrack) {
+      if (playerRef.current && typeof playerRef.current.stopVideo === 'function') {
+        try {
+          playerRef.current.stopVideo();
+        } catch (e) {}
+      }
+      lastVideoIdRef.current = null;
+      return;
+    }
+
+    const { videoId } = state.currentTrack;
+    const elapsed = state.isPlaying ? Math.max(0, (Date.now() - state.updatedAt) / 1000) : 0;
+    const targetTime = (state.currentTime || 0) + elapsed;
+
+    if (!(window as any).YT || !(window as any).YT.Player) {
+      // API not ready yet, will be picked up once ready
+      return;
+    }
+
+    // If player instance already exists and is valid
+    if (playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
+      if (lastVideoIdRef.current !== videoId) {
+        lastVideoIdRef.current = videoId;
+        try {
+          playerRef.current.loadVideoById({
+            videoId,
+            startSeconds: targetTime,
+          });
+          if (state.isPlaying) {
+            playerRef.current.playVideo?.();
+          } else {
+            playerRef.current.pauseVideo?.();
+          }
+        } catch (err) {
+          console.warn('Erro ao carregar vídeo no player existente:', err);
+        }
+      } else {
+        // Same video: adjust drift and play state
+        try {
+          const curTime = playerRef.current.getCurrentTime ? playerRef.current.getCurrentTime() : 0;
+          if (Math.abs(curTime - targetTime) > 3) {
+            playerRef.current.seekTo(targetTime, true);
+          }
+          if (state.isPlaying) {
+            playerRef.current.playVideo?.();
+          } else {
+            playerRef.current.pauseVideo?.();
+          }
+        } catch (err) {
+          console.warn('Erro ao sincronizar player:', err);
+        }
+      }
+      return;
+    }
+
+    // Need to instantiate player on DOM
+    if (!playerContainerRef.current) return;
+    playerContainerRef.current.innerHTML = '<div id="youtube-media-element" style="width:100%;height:100%"></div>';
+    lastVideoIdRef.current = videoId;
 
     try {
       playerRef.current = new (window as any).YT.Player('youtube-media-element', {
         height: '100%',
         width: '100%',
-        videoId: mediaState?.currentTrack?.videoId || '',
+        videoId,
         playerVars: {
-          autoplay: 1,
+          autoplay: state.isPlaying ? 1 : 0,
           controls: 1,
           modestbranding: 1,
           rel: 0,
           fs: 1,
           playsinline: 1,
+          start: Math.floor(targetTime),
         },
         events: {
           onReady: (event: any) => {
-            setIsPlayerReady(true);
-            event.target.setVolume(volume);
-            if (mediaState?.currentTrack) {
-              syncPlayback(mediaState);
-            }
+            try {
+              event.target.setVolume(volume);
+              if (state.isPlaying) {
+                event.target.playVideo();
+              }
+            } catch (e) {}
           },
           onStateChange: (event: any) => {
             // YT.PlayerState.ENDED is 0
@@ -108,69 +159,33 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
               onSyncAction('skip');
             }
           },
+          onError: (err: any) => {
+            console.warn('YouTube Player Error:', err);
+          },
         },
       });
     } catch (err) {
-      console.warn('Erro ao inicializar YouTube Player:', err);
+      console.warn('Erro ao instanciar YT.Player:', err);
     }
   };
 
-  // Sync playback when mediaState updates
-  const syncPlayback = (state: MediaRoomState) => {
-    const player = playerRef.current;
-    if (!player || typeof player.loadVideoById !== 'function') return;
-
-    if (!state.currentTrack) {
-      try {
-        player.stopVideo?.();
-      } catch (e) {}
-      lastVideoIdRef.current = null;
-      return;
-    }
-
-    const targetVideoId = state.currentTrack.videoId;
-    const elapsed = state.isPlaying ? Math.max(0, (Date.now() - state.updatedAt) / 1000) : 0;
-    const targetTime = (state.currentTime || 0) + elapsed;
-
-    if (lastVideoIdRef.current !== targetVideoId) {
-      lastVideoIdRef.current = targetVideoId;
-      try {
-        player.loadVideoById({
-          videoId: targetVideoId,
-          startSeconds: targetTime,
-        });
-        if (state.isPlaying) {
-          player.playVideo?.();
-        } else {
-          player.pauseVideo?.();
-        }
-      } catch (err) {
-        console.warn('Erro ao carregar vídeo:', err);
-      }
-    } else {
-      // Same video: check play/pause and drift
-      try {
-        const curTime = player.getCurrentTime ? player.getCurrentTime() : 0;
-        if (Math.abs(curTime - targetTime) > 3) {
-          player.seekTo(targetTime, true);
-        }
-
-        if (state.isPlaying) {
-          player.playVideo?.();
-        } else {
-          player.pauseVideo?.();
-        }
-      } catch (err) {
-        console.warn('Erro ao sincronizar:', err);
-      }
-    }
-  };
-
+  // Watch for state changes and trigger sync
   useEffect(() => {
-    if (isPlayerReady && mediaState) {
-      syncPlayback(mediaState);
-    }
-  }, [mediaState, isPlayerReady]);
+    syncPlayerWithState(mediaState);
+  }, [mediaState]);
+
+  // Periodic check if YouTube API loaded in case it was slow
+  useEffect(() => {
+    const checkYT = setInterval(() => {
+      if ((window as any).YT && (window as any).YT.Player) {
+        if (!playerRef.current && mediaState?.currentTrack) {
+          syncPlayerWithState(mediaState);
+        }
+      }
+    }, 300);
+
+    return () => clearInterval(checkYT);
+  }, [mediaState]);
 
   // Track timer loop for progress UI
   useEffect(() => {
@@ -193,8 +208,10 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
     e.preventDefault();
     const url = urlInput.trim();
     if (!url) return;
+    setIsSubmitting(true);
     onPlayMedia(url);
     setUrlInput('');
+    setTimeout(() => setIsSubmitting(false), 1200);
   };
 
   const handleSendChatMessage = (e: React.FormEvent) => {
@@ -301,8 +318,9 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
         <div ref={containerRef} className="flex-1 bg-black relative flex flex-col justify-center items-center overflow-hidden group">
           {/* YouTube Player Element (always exists in DOM for YT API) */}
           <div
+            ref={playerContainerRef}
             className={`w-full h-full absolute inset-0 ${
-              mediaState?.currentTrack ? 'block z-10' : 'hidden'
+              mediaState?.currentTrack ? 'block z-10' : 'hidden pointer-events-none'
             }`}
           >
             <div id="youtube-media-element" className="w-full h-full" />
@@ -334,11 +352,11 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
                 />
                 <button
                   type="submit"
-                  disabled={!urlInput.trim()}
+                  disabled={!urlInput.trim() || isSubmitting}
                   className="px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-black font-bold text-xs rounded-xl shadow-lg shadow-amber-500/20 transition flex items-center gap-1.5 cursor-pointer"
                 >
                   <Play className="w-3.5 h-3.5 fill-black" />
-                  <span>Tocar</span>
+                  <span>{isSubmitting ? 'Adicionando...' : 'Tocar'}</span>
                 </button>
               </form>
 
