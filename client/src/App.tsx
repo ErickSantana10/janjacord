@@ -70,6 +70,18 @@ export const App: React.FC = () => {
   // Media Room State (Watch together / Music DJ)
   const [mediaRoomState, setMediaRoomState] = useState<MediaRoomState | null>(null);
 
+  // Toast Notification customizada
+  const [toast, setToast] = useState<{ text: string; type: 'error' | 'info' } | null>(null);
+  const toastTimeoutRef = useRef<any>(null);
+
+  const showToast = (text: string, type: 'error' | 'info' = 'error') => {
+    setToast({ text, type });
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    toastTimeoutRef.current = setTimeout(() => {
+      setToast(null);
+    }, 4500);
+  };
+
   const socketRef = useRef<Socket | null>(null);
   const rtcManagerRef = useRef<WebRTCManager | null>(null);
   const activeChannelRef = useRef<Channel | null>(null);
@@ -163,7 +175,7 @@ export const App: React.FC = () => {
     });
 
     socket.on('server:kicked', ({ serverId }: { serverId: string }) => {
-      alert('Você foi removido deste servidor.');
+      showToast('Você foi removido deste servidor.', 'error');
       setServers((prev) => prev.filter((s) => s.id !== serverId));
       setCurrentServerId((prev) => (prev === serverId ? null : prev));
       setActiveChannel(null);
@@ -182,7 +194,7 @@ export const App: React.FC = () => {
     });
 
     socket.on('chat:error', ({ message }: { message: string }) => {
-      alert(`⚠️ ${message}`);
+      showToast(message, 'error');
     });
 
     socket.on('friend:list', (updatedFriends: FriendItem[]) => {
@@ -342,7 +354,7 @@ export const App: React.FC = () => {
         const u: User = { ...res.user, name: res.user.name || res.user.displayName || res.user.username, tag: res.user.tag || '001' };
         setCurrentUser(u);
       } else if (res?.error) {
-        alert(res.error);
+        showToast(res.error, 'error');
       }
     });
   };
@@ -416,54 +428,54 @@ export const App: React.FC = () => {
   const handleUpdateServerSettings = (name: string, iconColor: string) => {
     if (!currentServer) return;
     socketRef.current?.emit('server:update-settings', { serverId: currentServer.id, name, iconColor }, (res: any) => {
-      if (res?.error) alert(res.error);
+      if (res?.error) showToast(res.error, 'error');
     });
   };
 
   const handleCreateRole = (name: string, color: string, isAdmin: boolean) => {
     if (!currentServer) return;
     socketRef.current?.emit('server:create-role', { serverId: currentServer.id, name, color, isAdmin }, (res: any) => {
-      if (res?.error) alert(res.error);
+      if (res?.error) showToast(res.error, 'error');
     });
   };
 
   const handleDeleteRole = (roleId: string) => {
     if (!currentServer) return;
     socketRef.current?.emit('server:delete-role', { serverId: currentServer.id, roleId }, (res: any) => {
-      if (res?.error) alert(res.error);
+      if (res?.error) showToast(res.error, 'error');
     });
   };
 
   const handleAssignRole = (targetUserId: string, roleId: string) => {
     if (!currentServer) return;
     socketRef.current?.emit('server:assign-role', { serverId: currentServer.id, targetUserId, roleId }, (res: any) => {
-      if (res?.error) alert(res.error);
+      if (res?.error) showToast(res.error, 'error');
     });
   };
 
   const handleTimeoutMember = (targetUserId: string, durationMinutes: number) => {
     if (!currentServer) return;
     socketRef.current?.emit('server:timeout-member', { serverId: currentServer.id, targetUserId, durationMinutes }, (res: any) => {
-      if (res?.error) alert(res.error);
+      if (res?.error) showToast(res.error, 'error');
     });
   };
 
   const handleKickMember = (targetUserId: string) => {
     if (!currentServer) return;
     socketRef.current?.emit('server:kick-member', { serverId: currentServer.id, targetUserId }, (res: any) => {
-      if (res?.error) alert(res.error);
+      if (res?.error) showToast(res.error, 'error');
     });
   };
 
   const handleLeaveServer = (serverId: string) => {
     socketRef.current?.emit('server:leave', { serverId }, (res: any) => {
-      if (res?.error) alert(res.error);
+      if (res?.error) showToast(res.error, 'error');
     });
   };
 
   const handleDeleteServer = (serverId: string) => {
     socketRef.current?.emit('server:delete', { serverId }, (res: any) => {
-      if (res?.error) alert(res.error);
+      if (res?.error) showToast(res.error, 'error');
     });
   };
 
@@ -481,7 +493,7 @@ export const App: React.FC = () => {
     if (!activeChannel) return;
     socketRef.current?.emit('media:play', { channelId: activeChannel.id, url, inputUrl: url, title }, (res: any) => {
       if (res?.error) {
-        alert(res.error);
+        showToast(res.error, 'error');
       }
     });
   };
@@ -491,11 +503,16 @@ export const App: React.FC = () => {
     socketRef.current?.emit('media:sync-action', { channelId: activeChannel.id, action, time });
   };
 
+  const handleMediaHeartbeat = (currentTime: number, isPlaying: boolean) => {
+    if (!activeChannel) return;
+    socketRef.current?.emit('media:heartbeat', { channelId: activeChannel.id, currentTime, isPlaying });
+  };
+
   const handleVoteSkip = () => {
     if (!activeChannel) return;
     socketRef.current?.emit('media:vote-skip', { channelId: activeChannel.id }, (res: any) => {
       if (res?.error) {
-        alert(res.error);
+        showToast(res.error, 'error');
       }
     });
   };
@@ -518,7 +535,7 @@ export const App: React.FC = () => {
   const handleInviteFriend = (serverId: string, friendUserId: string) => {
     socketRef.current?.emit('server:invite-friend', { serverId, friendUserId }, (res: any) => {
       if (res?.error) {
-        alert(res.error);
+        showToast(res.error, 'error');
       }
     });
   };
@@ -526,7 +543,7 @@ export const App: React.FC = () => {
   const handleRespondServerInvite = (messageId: string, action: 'accept' | 'decline') => {
     socketRef.current?.emit('server:respond-invite', { messageId, action }, (res: any) => {
       if (res?.error) {
-        alert(res.error);
+        showToast(res.error, 'error');
       } else if (res?.server && action === 'accept') {
         setCurrentServerId(res.server.id);
         setActiveDMFriend(null);
@@ -725,6 +742,20 @@ export const App: React.FC = () => {
         <LoginModal onLogin={handleLogin} onRegister={handleRegister} />
       )}
 
+      {/* Caixinha de Alerta / Notificação Flutuante Customizada */}
+      {toast && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[100] bg-[#161722] border border-rose-500/40 rounded-2xl px-4 py-3 shadow-2xl shadow-black/60 flex items-center gap-3 animate-in fade-in duration-150 select-none">
+          <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse shrink-0" />
+          <span className="text-xs font-bold text-white">{toast.text}</span>
+          <button
+            onClick={() => setToast(null)}
+            className="text-xs text-slate-400 hover:text-white font-bold ml-2 cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* 2. Outgoing Call Animated Overlay */}
       {callingFriend && (
         <div className="fixed inset-0 z-50 bg-[#0c0d14]/90 backdrop-blur-md flex flex-col items-center justify-center p-6 space-y-8 select-none">
@@ -889,6 +920,7 @@ export const App: React.FC = () => {
             onSendMessage={handleSendMessage}
             onPlayMedia={handlePlayMedia}
             onSyncAction={handleMediaSyncAction}
+            onHeartbeat={handleMediaHeartbeat}
             onVoteSkip={handleVoteSkip}
             onSelectUser={(u) => setSelectedProfileUser(u)}
           />

@@ -80,6 +80,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const isAtHome = currentServer === null;
   const [isServerMenuOpen, setIsServerMenuOpen] = useState(false);
+  const [isBoostModalOpen, setIsBoostModalOpen] = useState(false);
+  const [isLeaveModalOpen, setIsLeaveModalOpen] = useState(false);
   const textChannels = currentServer ? currentServer.channels.filter((c) => c.type === 'text') : [];
   const voiceChannels = currentServer ? currentServer.channels.filter((c) => c.type === 'voice') : [];
   const mediaChannels = currentServer ? currentServer.channels.filter((c) => c.type === 'media') : [];
@@ -195,7 +197,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <button
                       onClick={() => {
                         setIsServerMenuOpen(false);
-                        alert(`✨ O servidor "${currentServer.name}" está no nível de impulso máximo!`);
+                        setIsBoostModalOpen(true);
                       }}
                       className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-fuchsia-400 hover:bg-fuchsia-500/10 hover:text-fuchsia-300 transition cursor-pointer"
                     >
@@ -243,7 +245,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <button
                       onClick={() => {
                         setIsServerMenuOpen(false);
-                        onLeaveServer(currentServer.id);
+                        setIsLeaveModalOpen(true);
                       }}
                       className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
                     >
@@ -630,6 +632,83 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Modal Customizado: Impulso de Servidor */}
+      {isBoostModalOpen && currentServer && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150 select-none"
+          onClick={() => setIsBoostModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm bg-[#141520] border border-fuchsia-500/40 rounded-3xl p-6 shadow-2xl text-center space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-fuchsia-500/15 border border-fuchsia-500/30 flex items-center justify-center text-fuchsia-400 shadow-lg shadow-fuchsia-500/20">
+              <Sparkles className="w-7 h-7" />
+            </div>
+            <div>
+              <h4 className="text-base font-black text-white">Nível Máximo de Impulso!</h4>
+              <p className="text-xs text-slate-300 mt-1.5 leading-relaxed">
+                O servidor <span className="font-bold text-fuchsia-400">"{currentServer.name}"</span> já possui todos os recursos VIP do Janjacord liberados: transmissão 1080p 60fps, áudio cristalino e salas de vídeo sincronizadas!
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsBoostModalOpen(false)}
+              className="w-full py-2.5 rounded-xl bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs font-bold shadow-lg shadow-fuchsia-600/30 transition cursor-pointer"
+            >
+              Incrível!
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Customizado: Confirmar Sair do Servidor */}
+      {isLeaveModalOpen && currentServer && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150 select-none"
+          onClick={() => setIsLeaveModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm bg-[#141520] border border-rose-500/40 rounded-3xl p-5 shadow-2xl space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
+                <LogOut className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-extrabold text-white">Sair de {currentServer.name}?</h4>
+                <p className="text-[11px] text-slate-400">Confirmar saída do servidor</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Tem certeza que deseja sair do servidor <span className="font-bold text-white">"{currentServer.name}"</span>? Você precisará de um novo convite caso queira voltar.
+            </p>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsLeaveModalOpen(false)}
+                className="px-4 py-2 rounded-xl bg-[#202233] hover:bg-[#282b40] text-slate-300 hover:text-white text-xs font-bold transition cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsLeaveModalOpen(false);
+                  onLeaveServer(currentServer.id);
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition cursor-pointer"
+              >
+                Sim, Sair
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

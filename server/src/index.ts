@@ -1541,8 +1541,19 @@ io.on('connection', (socket: Socket) => {
   });
 
   socket.on('media:sync-action', ({ channelId, action, time }: { channelId: string; action: 'play' | 'pause' | 'skip' | 'seek'; time?: number }) => {
-    let state = mediaRooms.get(channelId);
-    if (!state) return;
+    const session = onlineSessions.get(socket.id);
+    if (!session) return;
+
+    const state = mediaRooms.get(channelId);
+    if (!state || !state.currentTrack) return;
+
+    const isTrackOwner = state.currentTrack.addedBy.id === session.userId;
+    const ownerOnlineInRoom = state.listeners.includes(state.currentTrack.addedBy.id);
+
+    // Apenas a pessoa que adicionou o vídeo/música atual pode pausar, retomar ou avançar o tempo
+    if ((action === 'play' || action === 'pause' || action === 'seek') && !isTrackOwner) {
+      return;
+    }
 
     if (action === 'play') {
       state.isPlaying = true;
@@ -1553,9 +1564,13 @@ io.on('connection', (socket: Socket) => {
       if (time !== undefined) state.currentTime = time;
       state.updatedAt = Date.now();
     } else if (action === 'seek' && time !== undefined) {
-      state.currentTime = time;
+      state.currentTime = Math.max(0, time);
       state.updatedAt = Date.now();
     } else if (action === 'skip') {
+      // Skip automático ao fim do vídeo: aceita do dono da faixa (ou de qualquer ouvinte se o dono saiu da sala)
+      if (!isTrackOwner && ownerOnlineInRoom) {
+        return;
+      }
       state.skipVotes = [];
       if (state.queue.length > 0) {
         state.currentTrack = state.queue.shift() || null;
@@ -1569,6 +1584,28 @@ io.on('connection', (socket: Socket) => {
         state.updatedAt = Date.now();
       }
     }
+
+    io.emit('media:state-updated', state);
+  });
+
+  // Heartbeat contínuo enviado pelo dono do vídeo atual para manter o tempo de todo mundo 100% sincronizado
+  socket.on('media:heartbeat', ({ channelId, currentTime, isPlaying }: { channelId: string; currentTime: number; isPlaying: boolean }) => {
+    const session = onlineSessions.get(socket.id);
+    if (!session) return;
+
+    const state = mediaRooms.get(channelId);
+    if (!state || !state.currentTrack) return;
+
+    // Apenas o responsável por colocar o vídeo atual é a referência de tempo
+    if (state.currentTrack.addedBy.id !== session.userId) return;
+
+    if (typeof currentTime === 'number' && !isNaN(currentTime)) {
+      state.currentTime = Math.max(0, currentTime);
+    }
+    if (typeof isPlaying === 'boolean') {
+      state.isPlaying = isPlaying;
+    }
+    state.updatedAt = Date.now();
 
     io.emit('media:state-updated', state);
   });

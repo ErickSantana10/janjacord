@@ -51,6 +51,8 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
   const [sentFeedback, setSentFeedback] = useState(false);
   const [showRoleMenu, setShowRoleMenu] = useState(false);
   const [showTimeoutMenu, setShowTimeoutMenu] = useState(false);
+  const [confirmingKick, setConfirmingKick] = useState(false);
+  const [friendFeedback, setFriendFeedback] = useState<{ text: string; isError?: boolean } | null>(null);
 
   if (!user) return null;
 
@@ -89,8 +91,12 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
   const handleFriendClick = () => {
     if (isMe || isFriend || isPendingFriend) return;
     onSendFriendRequest(`${displayName}#${tag}`, (res: any) => {
-      if (res?.message) alert(res.message);
-      else if (res?.error) alert(res.error);
+      if (res?.message) {
+        setFriendFeedback({ text: res.message, isError: false });
+      } else if (res?.error) {
+        setFriendFeedback({ text: res.error, isError: true });
+      }
+      setTimeout(() => setFriendFeedback(null), 3500);
     });
   };
 
@@ -232,6 +238,18 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
             </span>
           </div>
 
+          {friendFeedback && (
+            <div
+              className={`px-3 py-2 rounded-xl text-xs font-semibold border ${
+                friendFeedback.isError
+                  ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                  : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+              }`}
+            >
+              {friendFeedback.text}
+            </div>
+          )}
+
           {/* Timeout Alert if Timed Out */}
           {isTimedOut && (
             <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-between text-xs text-rose-300 font-semibold">
@@ -320,28 +338,74 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
 
           {/* 5. Moderation Quick Actions (Admin Only) */}
           {iAmAdmin && !isMe && !isServerOwner && server && (
-            <div className="pt-2 border-t border-[#1e202f] flex gap-2">
-              <button
-                onClick={() => setShowTimeoutMenu(!showTimeoutMenu)}
-                className="flex-1 py-1.5 px-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition cursor-pointer"
-              >
-                <Clock className="w-3.5 h-3.5" />
-                <span>Timeout</span>
-              </button>
+            <div className="pt-2 border-t border-[#1e202f] space-y-2">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    setShowTimeoutMenu(!showTimeoutMenu);
+                    setConfirmingKick(false);
+                  }}
+                  className="flex-1 py-1.5 px-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition cursor-pointer"
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Timeout</span>
+                </button>
 
-              <button
-                onClick={() => {
-                  if (confirm(`Tem certeza que deseja expulsar ${displayName} do servidor?`)) {
-                    onKickMember?.(user.id);
-                    onClose();
-                  }
-                }}
-                className="py-1.5 px-3 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-xl text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
-                title="Expulsar do servidor"
-              >
-                <UserX className="w-3.5 h-3.5" />
-                <span>Expulsar</span>
-              </button>
+                <button
+                  onClick={() => {
+                    setConfirmingKick(!confirmingKick);
+                    setShowTimeoutMenu(false);
+                  }}
+                  className={`py-1.5 px-3 rounded-xl text-xs font-semibold flex items-center gap-1 transition cursor-pointer border ${
+                    confirmingKick
+                      ? 'bg-rose-600 text-white border-rose-500 shadow-lg shadow-rose-600/30'
+                      : 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border-rose-500/30'
+                  }`}
+                  title="Expulsar do servidor"
+                >
+                  <UserX className="w-3.5 h-3.5" />
+                  <span>Expulsar</span>
+                </button>
+              </div>
+
+              {/* Caixinha bonitinha de confirmação de Expulsão */}
+              {confirmingKick && (
+                <div className="p-3 bg-[#19141d] border border-rose-500/40 rounded-2xl space-y-2.5 shadow-xl animate-in fade-in duration-150">
+                  <div className="flex items-start gap-2">
+                    <div className="w-7 h-7 rounded-xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0 mt-0.5">
+                      <UserX className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-extrabold text-white">
+                        Expulsar {displayName}?
+                      </div>
+                      <p className="text-[11px] text-slate-300 leading-snug mt-0.5">
+                        Tem certeza que deseja remover <span className="font-bold text-rose-300">{displayName}</span> do servidor <span className="font-bold text-white">{server.name}</span>?
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingKick(false)}
+                      className="px-3 py-1.5 rounded-xl bg-[#222436] hover:bg-[#2a2d42] text-slate-300 hover:text-white text-xs font-bold transition cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onKickMember?.(user.id);
+                        setConfirmingKick(false);
+                        onClose();
+                      }}
+                      className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition cursor-pointer"
+                    >
+                      Sim, Expulsar
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

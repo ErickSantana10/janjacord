@@ -67,6 +67,10 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
 
   // Member search
   const [memberSearch, setMemberSearch] = useState('');
+  const [confirmDeleteServer, setConfirmDeleteServer] = useState(false);
+  const [confirmKickMember, setConfirmKickMember] = useState<{ id: string; name: string } | null>(null);
+  const [timeoutMemberTarget, setTimeoutMemberTarget] = useState<{ id: string; name: string } | null>(null);
+  const [customTimeoutMinutes, setCustomTimeoutMinutes] = useState('15');
 
   if (!isOpen) return null;
 
@@ -177,12 +181,7 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
           {/* Delete Server Option at Bottom (Owner Only) */}
           {isOwner && (
             <button
-              onClick={() => {
-                if (confirm(`ATENÇÃO: Deseja realmente excluir permanentemente o servidor "${server.name}"?`)) {
-                  onDeleteServer();
-                  onClose();
-                }
-              }}
+              onClick={() => setConfirmDeleteServer(true)}
               className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
             >
               <Trash2 className="w-4 h-4" />
@@ -518,10 +517,8 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
                                 if (isTimedOut) {
                                   onTimeoutMember(member.id, 0); // remover timeout
                                 } else {
-                                  const mins = prompt(`Quantos minutos de silenciamento para ${member.name}? (ex: 5, 15, 60):`, '15');
-                                  if (mins && !isNaN(Number(mins))) {
-                                    onTimeoutMember(member.id, Number(mins));
-                                  }
+                                  setTimeoutMemberTarget({ id: member.id, name: member.name });
+                                  setCustomTimeoutMinutes('15');
                                 }
                               }}
                               className={`p-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1 transition cursor-pointer ${
@@ -536,11 +533,7 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
 
                             {/* Kick Member */}
                             <button
-                              onClick={() => {
-                                if (confirm(`Tem certeza que deseja expulsar ${member.name} do servidor?`)) {
-                                  onKickMember(member.id);
-                                }
-                              }}
+                              onClick={() => setConfirmKickMember({ id: member.id, name: member.name })}
                               className="p-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition cursor-pointer"
                               title="Expulsar do Servidor"
                             >
@@ -556,6 +549,184 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
             )}
           </div>
         </div>
+
+        {/* Modal Customizado: Confirmar Exclusão do Servidor */}
+        {confirmDeleteServer && (
+          <div
+            className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+            onClick={() => setConfirmDeleteServer(false)}
+          >
+            <div
+              className="w-full max-w-sm bg-[#141520] border border-rose-500/40 rounded-3xl p-5 shadow-2xl space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-extrabold text-white">Excluir Servidor?</h4>
+                  <p className="text-[11px] text-rose-300 font-semibold">Esta ação não pode ser desfeita</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Tem certeza que deseja excluir permanentemente o servidor <span className="font-bold text-white">"{server.name}"</span> e todos os seus canais?
+              </p>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteServer(false)}
+                  className="px-4 py-2 rounded-xl bg-[#202233] hover:bg-[#282b40] text-slate-300 hover:text-white text-xs font-bold transition cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmDeleteServer(false);
+                    onDeleteServer();
+                    onClose();
+                  }}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition cursor-pointer"
+                >
+                  Sim, Excluir
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Customizado: Confirmar Expulsão de Membro */}
+        {confirmKickMember && (
+          <div
+            className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+            onClick={() => setConfirmKickMember(null)}
+          >
+            <div
+              className="w-full max-w-sm bg-[#141520] border border-rose-500/40 rounded-3xl p-5 shadow-2xl space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
+                  <UserX className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-extrabold text-white">Expulsar {confirmKickMember.name}?</h4>
+                  <p className="text-[11px] text-slate-400">Remover membro do servidor</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Tem certeza que deseja expulsar <span className="font-bold text-rose-300">{confirmKickMember.name}</span> do servidor <span className="font-bold text-white">{server.name}</span>?
+              </p>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmKickMember(null)}
+                  className="px-4 py-2 rounded-xl bg-[#202233] hover:bg-[#282b40] text-slate-300 hover:text-white text-xs font-bold transition cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onKickMember(confirmKickMember.id);
+                    setConfirmKickMember(null);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition cursor-pointer"
+                >
+                  Sim, Expulsar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Customizado: Escolher Tempo de Timeout */}
+        {timeoutMemberTarget && (
+          <div
+            className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+            onClick={() => setTimeoutMemberTarget(null)}
+          >
+            <div
+              className="w-full max-w-sm bg-[#141520] border border-amber-500/40 rounded-3xl p-5 shadow-2xl space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                  <Clock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-extrabold text-white">Silenciar {timeoutMemberTarget.name}</h4>
+                  <p className="text-[11px] text-slate-400">Escolha por quanto tempo aplicar o Timeout</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { label: '5 minutos', mins: 5 },
+                  { label: '15 minutos', mins: 15 },
+                  { label: '1 hora', mins: 60 },
+                  { label: '24 horas', mins: 1440 },
+                ].map((opt) => (
+                  <button
+                    key={opt.mins}
+                    type="button"
+                    onClick={() => {
+                      onTimeoutMember(timeoutMemberTarget.id, opt.mins);
+                      setTimeoutMemberTarget(null);
+                    }}
+                    className="py-2 px-3 rounded-xl bg-[#1d1f30] hover:bg-amber-500 hover:text-black text-slate-200 text-xs font-bold border border-[#2a2d42] transition cursor-pointer"
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="pt-2 border-t border-[#222436] space-y-1.5">
+                <label className="text-[10px] font-bold uppercase text-slate-400">
+                  Ou defina os minutos personalizados:
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    max="10080"
+                    value={customTimeoutMinutes}
+                    onChange={(e) => setCustomTimeoutMinutes(e.target.value)}
+                    className="flex-1 bg-[#181926] border border-[#27293d] rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-amber-500 select-text"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const mins = Number(customTimeoutMinutes);
+                      if (mins > 0) {
+                        onTimeoutMember(timeoutMemberTarget.id, mins);
+                        setTimeoutMemberTarget(null);
+                      }
+                    }}
+                    className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold transition cursor-pointer"
+                  >
+                    Aplicar
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={() => setTimeoutMemberTarget(null)}
+                  className="px-3.5 py-1.5 rounded-xl bg-[#202233] hover:bg-[#282b40] text-slate-300 hover:text-white text-xs font-bold transition cursor-pointer"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

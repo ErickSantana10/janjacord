@@ -12,7 +12,11 @@ import {
   Send,
   Maximize2,
   Music2,
-  Users
+  Users,
+  Lock,
+  Crown,
+  RotateCcw,
+  RotateCw
 } from 'lucide-react';
 import type { Channel, Message, User, MediaRoomState, MessageAttachment } from '../types';
 
@@ -24,6 +28,7 @@ interface MediaRoomProps {
   onSendMessage: (text: string, attachment?: MessageAttachment) => void;
   onPlayMedia: (url: string, title?: string) => void;
   onSyncAction: (action: 'play' | 'pause' | 'skip' | 'seek', time?: number) => void;
+  onHeartbeat?: (currentTime: number, isPlaying: boolean) => void;
   onVoteSkip: () => void;
   onSelectUser?: (user: any) => void;
 }
@@ -36,6 +41,7 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
   onSendMessage,
   onPlayMedia,
   onSyncAction,
+  onHeartbeat,
   onVoteSkip,
   onSelectUser,
 }) => {
@@ -47,12 +53,32 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [playerCurrentTime, setPlayerCurrentTime] = useState(0);
   const [playerDuration, setPlayerDuration] = useState(0);
+  const [isSeeking, setIsSeeking] = useState(false);
+  const [seekPreviewTime, setSeekPreviewTime] = useState(0);
 
   const playerRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastVideoIdRef = useRef<string | null>(null);
+  const volumeRef = useRef<number>(80);
+  const isMutedRef = useRef<boolean>(false);
+  const mediaStateRef = useRef<MediaRoomState | null>(mediaState);
+
+  useEffect(() => {
+    mediaStateRef.current = mediaState;
+  }, [mediaState]);
+
+  // Verifica se o usuário atual foi quem colocou o vídeo/música que está tocando
+  const isTrackOwner = Boolean(
+    currentUser &&
+      mediaState?.currentTrack &&
+      mediaState.currentTrack.addedBy.id === currentUser.id
+  );
+  const isTrackOwnerRef = useRef<boolean>(isTrackOwner);
+  useEffect(() => {
+    isTrackOwnerRef.current = isTrackOwner;
+  }, [isTrackOwner]);
 
   // Votação para pular (50% + 1)
   const skipVotes = mediaState?.skipVotes || [];
@@ -91,6 +117,8 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
         } catch (e) {}
       }
       lastVideoIdRef.current = null;
+      setPlayerCurrentTime(0);
+      setPlayerDuration(0);
       return;
     }
 
@@ -99,11 +127,10 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
     const targetTime = (state.currentTime || 0) + elapsed;
 
     if (!(window as any).YT || !(window as any).YT.Player) {
-      // API not ready yet, will be picked up once ready
       return;
     }
 
-    // If player instance already exists and is valid
+    // Se a instância do player já existe
     if (playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
       if (lastVideoIdRef.current !== videoId) {
         lastVideoIdRef.current = videoId;
@@ -112,6 +139,7 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
             videoId,
             startSeconds: targetTime,
           });
+          playerRef.current.setVolume?.(isMutedRef.current ? 0 : volumeRef.current);
           if (state.isPlaying) {
             playerRef.current.playVideo?.();
           } else {
@@ -121,15 +149,20 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
           console.warn('Erro ao carregar vídeo no player existente:', err);
         }
       } else {
-        // Same video: adjust drift and play state
+        // Mesmo vídeo: corrige diferença de tempo e garante estado Play/Pause
         try {
           const curTime = playerRef.current.getCurrentTime ? playerRef.current.getCurrentTime() : 0;
-          if (Math.abs(curTime - targetTime) > 3) {
+          const playerState = playerRef.current.getPlayerState ? playerRef.current.getPlayerState() : -1;
+          const maxAllowedDrift = isTrackOwnerRef.current ? 3.5 : 1.8;
+
+          if (!isSeeking && Math.abs(curTime - targetTime) > maxAllowedDrift) {
             playerRef.current.seekTo(targetTime, true);
           }
-          if (state.isPlaying) {
+
+          // 1 = PLAYING, 2 = PAUSED, 3 = BUFFERING
+          if (state.isPlaying && playerState !== 1 && playerState !== 3) {
             playerRef.current.playVideo?.();
-          } else {
+          } else if (!state.isPlaying && playerState === 1) {
             playerRef.current.pauseVideo?.();
           }
         } catch (err) {
@@ -139,7 +172,7 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
       return;
     }
 
-    // Need to instantiate player on DOM
+    // Instancia o player pela primeira vez
     if (!playerContainerRef.current) return;
     playerContainerRef.current.innerHTML = '<div id="youtube-media-element" style="width:100%;height:100%"></div>';
     lastVideoIdRef.current = videoId;
@@ -151,24 +184,34 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
         videoId,
         playerVars: {
           autoplay: state.isPlaying ? 1 : 0,
-          controls: 1,
+          controls: 0, // Desativa controles nativos do YouTube para evitar cliques acidentais na barra de tempo ao mexer no volume
+          disablekb: 1,
           modestbranding: 1,
           rel: 0,
-          fs: 1,
+          fs: 0,
+          iv_load_policy: 3,
           playsinline: 1,
           start: Math.floor(targetTime),
         },
         events: {
           onReady: (event: any) => {
             try {
-              event.target.setVolume(volume);
-              if (state.isPlaying) {
-                event.target.playVideo();
+              event.target.setVolume(isMutedRef.current ? 0 : volumeRef.current);
+              const latestState = mediaStateRef.current;
+              if (latestState?.currentTrack) {
+                const el = latestState.isPlaying ? Math.max(0, (Date.now() - latestState.updatedAt) / 1000) : 0;
+                const syncTarget = (latestState.currentTime || 0) + el;
+                event.target.seekTo(syncTarget, true);
+                if (latestState.isPlaying) {
+                  event.target.playVideo();
+                } else {
+                  event.target.pauseVideo();
+                }
               }
             } catch (e) {}
           },
           onStateChange: (event: any) => {
-            // YT.PlayerState.ENDED is 0
+            // YT.PlayerState.ENDED === 0
             if (event.data === 0) {
               onSyncAction('skip');
             }
@@ -201,41 +244,67 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
     return () => clearInterval(checkYT);
   }, [mediaState]);
 
-  // Track timer loop for progress UI
+  // Loop contínuo de verificação de tempo de cada pessoa (a cada 1s)
+  // Mantém a barra de progresso atualizada e corrige imediatamente qualquer pessoa fora de sincronia
   useEffect(() => {
-    const timer = setInterval(() => {
+    const syncTimer = setInterval(() => {
       const player = playerRef.current;
-      if (player && typeof player.getCurrentTime === 'function') {
-        try {
-          const cur = player.getCurrentTime();
-          const dur = player.getDuration ? player.getDuration() : 0;
-          setPlayerCurrentTime(cur || 0);
-          setPlayerDuration(dur || 0);
-        } catch (e) {}
-      }
+      const state = mediaStateRef.current;
+      if (!player || typeof player.getCurrentTime !== 'function' || !state?.currentTrack) return;
+
+      try {
+        const cur = player.getCurrentTime() || 0;
+        const dur = player.getDuration ? player.getDuration() || 0 : 0;
+        const playerState = player.getPlayerState ? player.getPlayerState() : -1;
+
+        if (!isSeeking) {
+          setPlayerCurrentTime(cur);
+        }
+        setPlayerDuration(dur);
+
+        // Calcula o tempo oficial esperado neste exato milissegundo
+        const elapsed = state.isPlaying ? Math.max(0, (Date.now() - state.updatedAt) / 1000) : 0;
+        const expectedTime = (state.currentTime || 0) + elapsed;
+
+        // Se for espectador (ou se o player local tiver desviado do servidor), força sincronização rigorosa
+        const maxDrift = isTrackOwnerRef.current ? 3.5 : 1.6;
+        if (!isSeeking && dur > 0 && expectedTime < dur - 1 && Math.abs(cur - expectedTime) > maxDrift) {
+          player.seekTo(expectedTime, true);
+        }
+
+        // Garante que ninguém fique pausado localmente se a sala estiver tocando (ou vice-versa)
+        if (state.isPlaying && playerState !== 1 && playerState !== 3) {
+          player.playVideo?.();
+        } else if (!state.isPlaying && playerState === 1) {
+          player.pauseVideo?.();
+        }
+      } catch (e) {}
     }, 1000);
 
-    return () => clearInterval(timer);
-  }, []);
+    return () => clearInterval(syncTimer);
+  }, [isSeeking]);
 
-  // Continuous drift sync across all viewers: keeps everyone within 2 seconds
+  // Heartbeat do dono do vídeo: envia o tempo exato do responsável a cada 2 segundos para manter todos cravados
   useEffect(() => {
-    const driftCheck = setInterval(() => {
-      const player = playerRef.current;
-      if (player && mediaState?.isPlaying && mediaState.currentTrack && typeof player.getCurrentTime === 'function') {
-        const elapsed = Math.max(0, (Date.now() - mediaState.updatedAt) / 1000);
-        const targetTime = (mediaState.currentTime || 0) + elapsed;
-        try {
-          const curTime = player.getCurrentTime();
-          if (Math.abs(curTime - targetTime) > 2.5) {
-            player.seekTo(targetTime, true);
-          }
-        } catch (e) {}
-      }
-    }, 2500);
+    if (!isTrackOwner || !mediaState?.currentTrack) return;
 
-    return () => clearInterval(driftCheck);
-  }, [mediaState]);
+    const heartbeatTimer = setInterval(() => {
+      const player = playerRef.current;
+      const state = mediaStateRef.current;
+      if (!player || !state?.currentTrack || typeof player.getCurrentTime !== 'function') return;
+
+      try {
+        const playerState = player.getPlayerState ? player.getPlayerState() : -1;
+        // Só envia heartbeat quando o vídeo está efetivamente reproduzindo (1) ou pausado (2)
+        if (playerState === 1 || playerState === 2) {
+          const cur = player.getCurrentTime() || 0;
+          onHeartbeat?.(cur, state.isPlaying);
+        }
+      } catch (e) {}
+    }, 2000);
+
+    return () => clearInterval(heartbeatTimer);
+  }, [isTrackOwner, mediaState?.currentTrack?.id]);
 
   const handleAddTrack = (e: React.FormEvent) => {
     e.preventDefault();
@@ -273,42 +342,89 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
   };
 
   const handleTogglePlayPause = () => {
+    if (!isTrackOwner || !mediaState?.currentTrack) return;
     const player = playerRef.current;
-    const curTime = player && typeof player.getCurrentTime === 'function' ? player.getCurrentTime() : 0;
-    if (mediaState?.isPlaying) {
+    const curTime = player && typeof player.getCurrentTime === 'function' ? player.getCurrentTime() : mediaState.currentTime || 0;
+    if (mediaState.isPlaying) {
+      player?.pauseVideo?.();
       onSyncAction('pause', curTime);
     } else {
+      player?.playVideo?.();
       onSyncAction('play', curTime);
     }
+  };
+
+  const handleSeekOffset = (deltaSeconds: number) => {
+    if (!isTrackOwner || !mediaState?.currentTrack) return;
+    const player = playerRef.current;
+    const curTime = player && typeof player.getCurrentTime === 'function' ? player.getCurrentTime() : playerCurrentTime;
+    const nextTime = Math.max(0, Math.min(playerDuration || 99999, curTime + deltaSeconds));
+    setPlayerCurrentTime(nextTime);
+    player?.seekTo?.(nextTime, true);
+    onSyncAction('seek', nextTime);
+  };
+
+  const handleSeekInput = (newTime: number) => {
+    if (!isTrackOwner) return;
+    setIsSeeking(true);
+    setSeekPreviewTime(newTime);
+  };
+
+  const handleSeekCommit = (newTime: number) => {
+    if (!isTrackOwner) return;
+    setIsSeeking(false);
+    setPlayerCurrentTime(newTime);
+    if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
+      playerRef.current.seekTo(newTime, true);
+    }
+    onSyncAction('seek', newTime);
   };
 
   const handleSkip = () => {
     onVoteSkip();
   };
 
+  // Volume 100% local e isolado: nunca altera o estado de tempo do vídeo
   const handleVolumeChange = (newVol: number) => {
     setVolume(newVol);
-    setIsMuted(newVol === 0);
+    volumeRef.current = newVol;
+    const muted = newVol === 0;
+    setIsMuted(muted);
+    isMutedRef.current = muted;
     if (playerRef.current && typeof playerRef.current.setVolume === 'function') {
-      playerRef.current.setVolume(newVol);
+      try {
+        playerRef.current.setVolume(newVol);
+      } catch (e) {}
     }
   };
 
   const handleToggleMute = () => {
     if (isMuted) {
       setIsMuted(false);
-      handleVolumeChange(volume || 50);
+      isMutedRef.current = false;
+      const restored = volume || 50;
+      setVolume(restored);
+      volumeRef.current = restored;
+      if (playerRef.current && typeof playerRef.current.setVolume === 'function') {
+        try {
+          playerRef.current.setVolume(restored);
+        } catch (e) {}
+      }
     } else {
       setIsMuted(true);
+      isMutedRef.current = true;
       if (playerRef.current && typeof playerRef.current.setVolume === 'function') {
-        playerRef.current.setVolume(0);
+        try {
+          playerRef.current.setVolume(0);
+        } catch (e) {}
       }
     }
   };
 
   const formatSeconds = (sec: number) => {
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
+    const safeSec = Math.max(0, Math.floor(sec || 0));
+    const m = Math.floor(safeSec / 60);
+    const s = safeSec % 60;
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
@@ -321,6 +437,9 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
       }
     }
   };
+
+  const displayedTime = isSeeking ? seekPreviewTime : playerCurrentTime;
+  const progressPercent = playerDuration > 0 ? Math.min(100, (displayedTime / playerDuration) * 100) : 0;
 
   return (
     <div className="flex-1 flex overflow-hidden bg-[#0d0e14]">
@@ -336,20 +455,48 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
               <h2 className="text-sm font-bold text-white flex items-center gap-2">
                 <span>{channel.name}</span>
                 <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                  Sala de Vídeo & DJ
+                  Sala Sincronizada
                 </span>
               </h2>
             </div>
           </div>
 
           <div className="flex items-center gap-2 text-xs text-slate-400">
+            {/* Badge de quem controla o vídeo atual */}
+            {mediaState?.currentTrack && (
+              <span
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-semibold border ${
+                  isTrackOwner
+                    ? 'bg-amber-500/15 border-amber-500/30 text-amber-300'
+                    : 'bg-[#181926] border-[#27293d] text-slate-300'
+                }`}
+                title={
+                  isTrackOwner
+                    ? 'Você adicionou este vídeo e pode pausar ou avançar o tempo para todos'
+                    : `Apenas ${mediaState.currentTrack.addedBy.name} pode pausar ou avançar este vídeo`
+                }
+              >
+                {isTrackOwner ? (
+                  <>
+                    <Crown className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Você controla o player</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-3.5 h-3.5 text-slate-400" />
+                    <span>DJ: {mediaState.currentTrack.addedBy.name}</span>
+                  </>
+                )}
+              </span>
+            )}
+
             {/* Active Listeners count */}
             <span
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#181926] border border-[#27293d] text-slate-300 font-semibold"
-              title="Pessoas conectadas nesta sala"
+              title="Pessoas sincronizadas nesta sala"
             >
               <Users className="w-3.5 h-3.5 text-indigo-400" />
-              <span>{totalListeners} {totalListeners === 1 ? 'ouvindo' : 'ouvindo'}</span>
+              <span>{totalListeners} ouvindo</span>
             </span>
 
             {/* Vote Skip Indicator Pill */}
@@ -362,7 +509,7 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
             {mediaState?.currentTrack ? (
               <span className="flex items-center gap-1.5 text-emerald-400 font-semibold bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                {mediaState.isPlaying ? 'Reproduzindo' : 'Pausado'}
+                {mediaState.isPlaying ? 'Sincronizado' : 'Pausado pelo DJ'}
               </span>
             ) : (
               <span className="text-slate-500 italic">Fila Vazia</span>
@@ -371,16 +518,33 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
         </div>
 
         {/* Video Canvas Container */}
-        <div ref={containerRef} className="flex-1 bg-black relative flex flex-col justify-center items-center overflow-hidden group">
-          {/* YouTube Player Element (always exists in DOM for YT API) */}
+        <div ref={containerRef} className="flex-1 bg-black relative flex flex-col justify-center items-center overflow-hidden group select-none">
+          {/* YouTube Player Element (pointer-events-none impede cliques acidentais dentro do iframe do YouTube) */}
           <div
             ref={playerContainerRef}
-            className={`w-full h-full absolute inset-0 ${
-              mediaState?.currentTrack ? 'block z-10' : 'hidden pointer-events-none'
+            className={`w-full h-full absolute inset-0 pointer-events-none select-none ${
+              mediaState?.currentTrack ? 'block z-10' : 'hidden'
             }`}
           >
-            <div id="youtube-media-element" className="w-full h-full" />
+            <div id="youtube-media-element" className="w-full h-full pointer-events-none" />
           </div>
+
+          {/* Camada protetora sobre o vídeo: se for o DJ da faixa, clicar na tela pausa/despausa; se não for, impede dessincronização */}
+          {mediaState?.currentTrack && (
+            <div
+              onClick={() => {
+                if (isTrackOwner) {
+                  handleTogglePlayPause();
+                }
+              }}
+              className={`absolute inset-0 z-20 ${isTrackOwner ? 'cursor-pointer' : 'cursor-default'}`}
+              title={
+                isTrackOwner
+                  ? 'Clique para Pausar / Reproduzir para todos'
+                  : `Sincronizado com ${mediaState.currentTrack.addedBy.name}`
+              }
+            />
+          )}
 
           {/* Placeholder when no video is playing */}
           {!mediaState?.currentTrack && (
@@ -423,8 +587,50 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
           )}
         </div>
 
+        {/* Custom Progress / Seek Bar (Exclusiva para quem colocou o vídeo) */}
+        {mediaState?.currentTrack && (
+          <div className="px-4 pt-2.5 pb-1 bg-[#12131c] border-t border-[#1e1f2b] flex items-center gap-3 select-none">
+            <span className="text-[11px] font-mono text-slate-400 w-10 text-right">
+              {formatSeconds(displayedTime)}
+            </span>
+
+            <div className="relative flex-1 flex items-center">
+              <div className="w-full h-1.5 bg-[#222435] rounded-full overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-150 ${
+                    isTrackOwner ? 'bg-amber-500' : 'bg-indigo-500'
+                  }`}
+                  style={{ width: `${progressPercent}%` }}
+                />
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(1, Math.floor(playerDuration))}
+                value={Math.floor(displayedTime)}
+                disabled={!isTrackOwner || playerDuration <= 0}
+                onChange={(e) => handleSeekInput(Number(e.target.value))}
+                onMouseUp={(e) => handleSeekCommit(Number((e.target as HTMLInputElement).value))}
+                onTouchEnd={(e) => handleSeekCommit(Number((e.target as HTMLInputElement).value))}
+                className={`absolute inset-0 w-full h-full opacity-0 ${
+                  isTrackOwner ? 'cursor-pointer' : 'cursor-not-allowed'
+                }`}
+                title={
+                  isTrackOwner
+                    ? 'Arraste para avançar ou voltar o vídeo para todo mundo'
+                    : `Apenas ${mediaState.currentTrack.addedBy.name} pode avançar ou voltar o tempo`
+                }
+              />
+            </div>
+
+            <span className="text-[11px] font-mono text-slate-400 w-10">
+              {formatSeconds(playerDuration)}
+            </span>
+          </div>
+        )}
+
         {/* Media Controls Bar */}
-        <div className="h-16 px-4 bg-[#12131c] border-t border-[#1e1f2b] flex items-center justify-between gap-4">
+        <div className="h-16 px-4 bg-[#12131c] border-t border-[#1e1f2b]/60 flex items-center justify-between gap-4 select-none">
           {/* Left: Track Info */}
           <div className="flex items-center gap-3 min-w-0 max-w-[35%]">
             {mediaState?.currentTrack ? (
@@ -439,7 +645,7 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
                     {mediaState.currentTrack.title}
                   </div>
                   <div className="text-[11px] text-slate-400 flex items-center gap-1.5 truncate mt-0.5">
-                    <span>Adicionado por</span>
+                    <span>Colocado por</span>
                     <span className="font-semibold text-amber-400">
                       {mediaState.currentTrack.addedBy.name}
                     </span>
@@ -453,60 +659,92 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
             )}
           </div>
 
-          {/* Center: Play / Pause / Skip Controls */}
-          <div className="flex flex-col items-center gap-1">
-            <div className="flex items-center gap-3">
-              <button
-                onClick={handleTogglePlayPause}
-                disabled={!mediaState?.currentTrack}
-                className="w-10 h-10 rounded-full bg-white hover:bg-slate-200 disabled:opacity-30 disabled:hover:bg-white text-black flex items-center justify-center transition shadow-lg shadow-white/10 cursor-pointer"
-                title={mediaState?.isPlaying ? 'Pausar para todos' : 'Tocar para todos'}
-              >
-                {mediaState?.isPlaying ? (
-                  <Pause className="w-5 h-5 fill-black" />
-                ) : (
-                  <Play className="w-5 h-5 fill-black ml-0.5" />
-                )}
-              </button>
+          {/* Center: Play / Pause / Seek / Vote Skip Controls */}
+          <div className="flex items-center gap-2.5">
+            {/* -10s button (Track Owner Only) */}
+            <button
+              onClick={() => handleSeekOffset(-10)}
+              disabled={!mediaState?.currentTrack || !isTrackOwner}
+              className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-[#1e1f2b] disabled:opacity-25 disabled:cursor-not-allowed transition cursor-pointer"
+              title={
+                isTrackOwner
+                  ? 'Voltar 10 segundos para todos'
+                  : `Apenas ${mediaState?.currentTrack?.addedBy.name || 'o DJ'} pode voltar o vídeo`
+              }
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
 
-              <button
-                onClick={handleSkip}
-                disabled={!mediaState?.currentTrack}
-                className={`px-3 py-2 rounded-xl flex items-center gap-1.5 text-xs font-bold transition cursor-pointer disabled:opacity-30 ${
-                  hasUserVoted
-                    ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/20'
-                    : 'text-slate-300 hover:text-white hover:bg-[#1e1f2b]'
-                }`}
-                title={`Votação para pular música (50% + 1): ${currentVoteCount} de ${requiredVotes} votos necessários`}
-              >
-                <SkipForward className="w-4 h-4" />
-                <span>
-                  {hasUserVoted ? 'Votado' : 'Pular'} ({currentVoteCount}/{requiredVotes})
-                </span>
-              </button>
-            </div>
+            {/* Play / Pause (Track Owner Only) */}
+            <button
+              onClick={handleTogglePlayPause}
+              disabled={!mediaState?.currentTrack || !isTrackOwner}
+              className={`w-10 h-10 rounded-full flex items-center justify-center transition shadow-lg ${
+                isTrackOwner
+                  ? 'bg-white hover:bg-slate-200 text-black shadow-white/10 cursor-pointer'
+                  : 'bg-[#1e2030] text-slate-400 border border-[#2c2f45] opacity-60 cursor-not-allowed'
+              }`}
+              title={
+                !mediaState?.currentTrack
+                  ? 'Nenhum vídeo tocando'
+                  : isTrackOwner
+                  ? mediaState.isPlaying
+                    ? 'Pausar para todos'
+                    : 'Reproduzir para todos'
+                  : `Somente ${mediaState.currentTrack.addedBy.name} pode pausar ou despausar`
+              }
+            >
+              {mediaState?.isPlaying ? (
+                <Pause className={`w-5 h-5 ${isTrackOwner ? 'fill-black' : ''}`} />
+              ) : (
+                <Play className={`w-5 h-5 ml-0.5 ${isTrackOwner ? 'fill-black' : ''}`} />
+              )}
+            </button>
 
-            {/* Time progress label */}
-            {mediaState?.currentTrack && (
-              <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1">
-                <span>{formatSeconds(playerCurrentTime)}</span>
-                <span>/</span>
-                <span>{formatSeconds(playerDuration)}</span>
-              </div>
-            )}
+            {/* +10s button (Track Owner Only) */}
+            <button
+              onClick={() => handleSeekOffset(10)}
+              disabled={!mediaState?.currentTrack || !isTrackOwner}
+              className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-[#1e1f2b] disabled:opacity-25 disabled:cursor-not-allowed transition cursor-pointer"
+              title={
+                isTrackOwner
+                  ? 'Avançar 10 segundos para todos'
+                  : `Apenas ${mediaState?.currentTrack?.addedBy.name || 'o DJ'} pode avançar o vídeo`
+              }
+            >
+              <RotateCw className="w-4 h-4" />
+            </button>
+
+            {/* Vote Skip (Everyone can vote 50%+1) */}
+            <button
+              onClick={handleSkip}
+              disabled={!mediaState?.currentTrack}
+              className={`px-3 py-2 rounded-xl flex items-center gap-1.5 text-xs font-bold transition cursor-pointer disabled:opacity-30 ${
+                hasUserVoted
+                  ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/20'
+                  : 'text-slate-300 hover:text-white hover:bg-[#1e1f2b]'
+              }`}
+              title={`Votação para pular música (50% + 1): ${currentVoteCount} de ${requiredVotes} votos necessários`}
+            >
+              <SkipForward className="w-4 h-4" />
+              <span>
+                {hasUserVoted ? 'Votado' : 'Pular'} ({currentVoteCount}/{requiredVotes})
+              </span>
+            </button>
           </div>
 
-          {/* Right: Volume & Fullscreen */}
+          {/* Right: Pure Local Volume & Fullscreen */}
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 bg-[#181926] px-2.5 py-1.5 rounded-xl border border-[#25273a]">
               <button
                 onClick={handleToggleMute}
                 className="text-slate-400 hover:text-white transition cursor-pointer"
+                title={isMuted ? 'Ativar som (apenas para você)' : 'Mutar som (apenas para você)'}
               >
                 {isMuted || volume === 0 ? (
                   <VolumeX className="w-4 h-4 text-rose-400" />
                 ) : (
-                  <Volume2 className="w-4 h-4" />
+                  <Volume2 className="w-4 h-4 text-amber-400" />
                 )}
               </button>
               <input
@@ -514,9 +752,16 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
                 min="0"
                 max="100"
                 value={isMuted ? 0 : volume}
-                onChange={(e) => handleVolumeChange(Number(e.target.value))}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  handleVolumeChange(Number(e.target.value));
+                }}
                 className="w-20 accent-amber-500 cursor-pointer h-1.5 bg-[#222435] rounded-lg"
+                title={`Volume local: ${isMuted ? 0 : volume}%`}
               />
+              <span className="text-[10px] font-mono text-slate-400 w-7 text-right">
+                {isMuted ? '0%' : `${volume}%`}
+              </span>
             </div>
 
             <button
@@ -590,9 +835,18 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
             {/* Currently Playing Card */}
             {mediaState?.currentTrack && (
               <div className="mb-3 bg-gradient-to-r from-amber-500/10 to-indigo-500/10 border border-amber-500/30 rounded-2xl p-3 space-y-2">
-                <div className="text-[10px] font-black uppercase tracking-wider text-amber-400 flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
-                  <span>Tocando Agora</span>
+                <div className="flex items-center justify-between">
+                  <div className="text-[10px] font-black uppercase tracking-wider text-amber-400 flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                    <span>Tocando Agora</span>
+                  </div>
+                  <span className="text-[10px] font-semibold text-slate-400 flex items-center gap-1">
+                    {isTrackOwner ? (
+                      <span className="text-amber-300 font-bold">👑 Seu vídeo</span>
+                    ) : (
+                      <span>🔒 Controle do DJ</span>
+                    )}
+                  </span>
                 </div>
                 <div className="flex gap-2.5 items-center">
                   <img
