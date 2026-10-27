@@ -19,6 +19,13 @@ export interface DBChannel {
   type: 'text' | 'voice' | 'media';
 }
 
+export interface ServerRole {
+  id: string;
+  name: string;
+  color: string;
+  isAdmin?: boolean;
+}
+
 export interface DBServer {
   id: string;
   name: string;
@@ -27,6 +34,9 @@ export interface DBServer {
   inviteCode: string;
   members: string[];
   channels: DBChannel[];
+  roles?: ServerRole[];
+  memberRoles?: Record<string, string[]>; // userId -> roleIds
+  timeouts?: Record<string, number>; // userId -> timestamp expiry
 }
 
 export interface DBFriendship {

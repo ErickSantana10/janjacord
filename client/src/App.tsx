@@ -11,6 +11,8 @@ import { CreateServerModal } from './components/CreateServerModal';
 import { CreateChannelModal } from './components/CreateChannelModal';
 import { InviteModal } from './components/InviteModal';
 import { UserSettingsModal } from './components/UserSettingsModal';
+import { ServerSettingsModal } from './components/ServerSettingsModal';
+import { UserProfileCard } from './components/UserProfileCard';
 import { ServerMemberList } from './components/ServerMemberList';
 import { WebRTCManager } from './services/webrtc';
 import { sounds } from './services/soundEffects';
@@ -62,6 +64,8 @@ export const App: React.FC = () => {
   const [isCreateChannelOpen, setIsCreateChannelOpen] = useState(false);
   const [createChannelType, setCreateChannelType] = useState<'text' | 'voice' | 'media'>('text');
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+  const [isServerSettingsOpen, setIsServerSettingsOpen] = useState(false);
+  const [selectedProfileUser, setSelectedProfileUser] = useState<User | ServerMemberInfo | null>(null);
 
   // Media Room State (Watch together / Music DJ)
   const [mediaRoomState, setMediaRoomState] = useState<MediaRoomState | null>(null);
@@ -152,6 +156,33 @@ export const App: React.FC = () => {
 
     socket.on('server:joined', (joinedServer: ServerItem) => {
       setServers((prev) => [...prev.filter((s) => s.id !== joinedServer.id), joinedServer]);
+    });
+
+    socket.on('server:updated', (updatedServer: ServerItem) => {
+      setServers((prev) => prev.map((s) => (s.id === updatedServer.id ? updatedServer : s)));
+    });
+
+    socket.on('server:kicked', ({ serverId }: { serverId: string }) => {
+      alert('Você foi removido deste servidor.');
+      setServers((prev) => prev.filter((s) => s.id !== serverId));
+      setCurrentServerId((prev) => (prev === serverId ? null : prev));
+      setActiveChannel(null);
+    });
+
+    socket.on('server:left', ({ serverId }: { serverId: string }) => {
+      setServers((prev) => prev.filter((s) => s.id !== serverId));
+      setCurrentServerId((prev) => (prev === serverId ? null : prev));
+      setActiveChannel(null);
+    });
+
+    socket.on('server:deleted', ({ serverId }: { serverId: string }) => {
+      setServers((prev) => prev.filter((s) => s.id !== serverId));
+      setCurrentServerId((prev) => (prev === serverId ? null : prev));
+      setActiveChannel(null);
+    });
+
+    socket.on('chat:error', ({ message }: { message: string }) => {
+      alert(`⚠️ ${message}`);
     });
 
     socket.on('friend:list', (updatedFriends: FriendItem[]) => {
@@ -379,6 +410,60 @@ export const App: React.FC = () => {
           });
         }
       }
+    });
+  };
+
+  const handleUpdateServerSettings = (name: string, iconColor: string) => {
+    if (!currentServer) return;
+    socketRef.current?.emit('server:update-settings', { serverId: currentServer.id, name, iconColor }, (res: any) => {
+      if (res?.error) alert(res.error);
+    });
+  };
+
+  const handleCreateRole = (name: string, color: string, isAdmin: boolean) => {
+    if (!currentServer) return;
+    socketRef.current?.emit('server:create-role', { serverId: currentServer.id, name, color, isAdmin }, (res: any) => {
+      if (res?.error) alert(res.error);
+    });
+  };
+
+  const handleDeleteRole = (roleId: string) => {
+    if (!currentServer) return;
+    socketRef.current?.emit('server:delete-role', { serverId: currentServer.id, roleId }, (res: any) => {
+      if (res?.error) alert(res.error);
+    });
+  };
+
+  const handleAssignRole = (targetUserId: string, roleId: string) => {
+    if (!currentServer) return;
+    socketRef.current?.emit('server:assign-role', { serverId: currentServer.id, targetUserId, roleId }, (res: any) => {
+      if (res?.error) alert(res.error);
+    });
+  };
+
+  const handleTimeoutMember = (targetUserId: string, durationMinutes: number) => {
+    if (!currentServer) return;
+    socketRef.current?.emit('server:timeout-member', { serverId: currentServer.id, targetUserId, durationMinutes }, (res: any) => {
+      if (res?.error) alert(res.error);
+    });
+  };
+
+  const handleKickMember = (targetUserId: string) => {
+    if (!currentServer) return;
+    socketRef.current?.emit('server:kick-member', { serverId: currentServer.id, targetUserId }, (res: any) => {
+      if (res?.error) alert(res.error);
+    });
+  };
+
+  const handleLeaveServer = (serverId: string) => {
+    socketRef.current?.emit('server:leave', { serverId }, (res: any) => {
+      if (res?.error) alert(res.error);
+    });
+  };
+
+  const handleDeleteServer = (serverId: string) => {
+    socketRef.current?.emit('server:delete', { serverId }, (res: any) => {
+      if (res?.error) alert(res.error);
     });
   };
 
@@ -750,6 +835,8 @@ export const App: React.FC = () => {
           setIsCreateChannelOpen(true);
         }}
         onOpenInviteModal={() => setIsInviteModalOpen(true)}
+        onOpenServerSettings={() => setIsServerSettingsOpen(true)}
+        onLeaveServer={handleLeaveServer}
         onSelectChannel={handleSelectChannel}
         onJoinVoice={handleJoinVoice}
         onViewVoiceRoom={handleViewVoiceRoom}
@@ -803,6 +890,7 @@ export const App: React.FC = () => {
             onPlayMedia={handlePlayMedia}
             onSyncAction={handleMediaSyncAction}
             onVoteSkip={handleVoteSkip}
+            onSelectUser={(u) => setSelectedProfileUser(u)}
           />
         ) : currentServer && activeChannel ? (
           /* If user is inside a server's text channel (can be talking in voice at the same time!) */
@@ -811,6 +899,7 @@ export const App: React.FC = () => {
             currentUser={currentUser}
             messages={messages.filter((m) => m.serverId === currentServer.id)}
             onSendMessage={handleSendMessage}
+            onSelectUser={(u) => setSelectedProfileUser(u)}
           />
         ) : activeDMFriend ? (
           /* 1-on-1 private chat with friend */
@@ -845,6 +934,7 @@ export const App: React.FC = () => {
             currentUser={currentUser}
             onlineUsers={onlineUsers}
             allMembersInfo={allServerMembers}
+            onSelectMember={(member) => setSelectedProfileUser(member)}
           />
         )}
       </div>
@@ -879,6 +969,43 @@ export const App: React.FC = () => {
         onClose={() => setIsSettingsOpen(false)}
         onSave={handleSaveProfile}
       />
+
+      {currentServer && (
+        <ServerSettingsModal
+          isOpen={isServerSettingsOpen}
+          server={currentServer}
+          currentUser={currentUser}
+          allMembersInfo={allServerMembers}
+          onClose={() => setIsServerSettingsOpen(false)}
+          onUpdateSettings={handleUpdateServerSettings}
+          onCreateRole={handleCreateRole}
+          onDeleteRole={handleDeleteRole}
+          onAssignRole={handleAssignRole}
+          onTimeoutMember={handleTimeoutMember}
+          onKickMember={handleKickMember}
+          onDeleteServer={() => handleDeleteServer(currentServer.id)}
+        />
+      )}
+
+      {selectedProfileUser && (
+        <UserProfileCard
+          user={selectedProfileUser}
+          currentUser={currentUser}
+          server={currentServer}
+          friends={friends}
+          onlineUsers={onlineUsers}
+          onClose={() => setSelectedProfileUser(null)}
+          onSendFriendRequest={handleSendFriendRequest}
+          onStartDMCall={handleStartDMCall}
+          onSelectDM={handleSelectDM}
+          onSendDM={(toUserId, text) => {
+            socketRef.current?.emit('dm:send', { toUserId, text });
+          }}
+          onAssignRole={handleAssignRole}
+          onTimeoutMember={handleTimeoutMember}
+          onKickMember={handleKickMember}
+        />
+      )}
     </div>
   );
 };

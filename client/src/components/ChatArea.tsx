@@ -7,6 +7,7 @@ interface ChatAreaProps {
   currentUser: User | null;
   messages: Message[];
   onSendMessage: (text: string, attachment?: MessageAttachment) => void;
+  onSelectUser?: (user: any) => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -14,6 +15,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   currentUser,
   messages,
   onSendMessage,
+  onSelectUser,
 }) => {
   const [inputText, setInputText] = useState('');
   const [pendingAttachment, setPendingAttachment] = useState<MessageAttachment | null>(null);
@@ -128,17 +130,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           channelMessages.map((msg) => {
             const isMe = msg.userId === currentUser?.id;
 
+            const isSystem = msg.userId === 'system';
+            const handleUserClick = () => {
+              if (!isSystem && onSelectUser) {
+                onSelectUser({
+                  id: msg.userId,
+                  name: msg.userName,
+                  avatarColor: msg.avatarColor,
+                  avatarUrl: msg.avatarUrl,
+                });
+              }
+            };
+
             return (
               <div key={msg.id} className="flex items-start gap-3 group hover:bg-[#181926]/40 -mx-4 px-4 py-1.5 rounded-lg transition">
                 {msg.avatarUrl ? (
                   <img
                     src={msg.avatarUrl}
                     alt={msg.userName}
-                    className="w-10 h-10 rounded-full object-cover shrink-0 shadow-md"
+                    onClick={handleUserClick}
+                    className={`w-10 h-10 rounded-full object-cover shrink-0 shadow-md ${!isSystem ? 'cursor-pointer hover:opacity-90' : ''}`}
                   />
                 ) : (
                   <div
-                    className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0 shadow-md"
+                    onClick={handleUserClick}
+                    className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0 shadow-md ${!isSystem ? 'cursor-pointer hover:opacity-90' : ''}`}
                     style={{ backgroundColor: msg.avatarColor || '#6366f1' }}
                   >
                     {msg.userName.slice(0, 1).toUpperCase()}
@@ -147,7 +163,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline gap-2">
-                    <span className={`text-sm font-semibold truncate ${isMe ? 'text-indigo-400' : 'text-slate-200'}`}>
+                    <span
+                      onClick={handleUserClick}
+                      className={`text-sm font-semibold truncate ${!isSystem ? 'cursor-pointer hover:underline' : ''} ${isMe ? 'text-indigo-400' : 'text-slate-200'}`}
+                    >
                       {msg.userName}
                     </span>
                     <span className="text-[11px] text-slate-400 font-mono">{msg.timestamp}</span>

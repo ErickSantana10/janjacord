@@ -25,6 +25,7 @@ interface MediaRoomProps {
   onPlayMedia: (url: string, title?: string) => void;
   onSyncAction: (action: 'play' | 'pause' | 'skip' | 'seek', time?: number) => void;
   onVoteSkip: () => void;
+  onSelectUser?: (user: any) => void;
 }
 
 export const MediaRoom: React.FC<MediaRoomProps> = ({
@@ -36,6 +37,7 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
   onPlayMedia,
   onSyncAction,
   onVoteSkip,
+  onSelectUser,
 }) => {
   const [activeTab, setActiveTab] = useState<'queue' | 'chat'>('queue');
   const [urlInput, setUrlInput] = useState('');
@@ -215,6 +217,25 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
 
     return () => clearInterval(timer);
   }, []);
+
+  // Continuous drift sync across all viewers: keeps everyone within 2 seconds
+  useEffect(() => {
+    const driftCheck = setInterval(() => {
+      const player = playerRef.current;
+      if (player && mediaState?.isPlaying && mediaState.currentTrack && typeof player.getCurrentTime === 'function') {
+        const elapsed = Math.max(0, (Date.now() - mediaState.updatedAt) / 1000);
+        const targetTime = (mediaState.currentTime || 0) + elapsed;
+        try {
+          const curTime = player.getCurrentTime();
+          if (Math.abs(curTime - targetTime) > 2.5) {
+            player.seekTo(targetTime, true);
+          }
+        } catch (e) {}
+      }
+    }, 2500);
+
+    return () => clearInterval(driftCheck);
+  }, [mediaState]);
 
   const handleAddTrack = (e: React.FormEvent) => {
     e.preventDefault();
@@ -694,14 +715,18 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
                       }`}
                     >
                       <div
-                        className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-white text-[11px] shrink-0"
+                        onClick={() => !isDJ && onSelectUser?.({ id: msg.userId, name: msg.userName, avatarColor: msg.avatarColor, avatarUrl: msg.avatarUrl })}
+                        className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-white text-[11px] shrink-0 ${!isDJ ? 'cursor-pointer hover:opacity-90' : ''}`}
                         style={{ backgroundColor: msg.avatarColor || '#6366f1' }}
                       >
                         {msg.userName.slice(0, 1).toUpperCase()}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-baseline gap-1.5">
-                          <span className={`font-bold ${isDJ ? 'text-amber-400' : 'text-slate-200'}`}>
+                          <span
+                            onClick={() => !isDJ && onSelectUser?.({ id: msg.userId, name: msg.userName, avatarColor: msg.avatarColor, avatarUrl: msg.avatarUrl })}
+                            className={`font-bold ${isDJ ? 'text-amber-400' : 'text-slate-200 cursor-pointer hover:underline'}`}
+                          >
                             {msg.userName}
                           </span>
                           <span className="text-[9px] text-slate-500 font-mono">

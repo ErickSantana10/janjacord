@@ -27,6 +27,7 @@ export interface ServerMemberInfo {
   tag: string;
   avatarColor: string;
   avatarUrl?: string;
+  bio?: string;
 }
 
 export interface Channel {
@@ -61,6 +62,13 @@ export interface MediaRoomState {
   listeners: string[];
 }
 
+export interface ServerRole {
+  id: string;
+  name: string;
+  color: string;
+  isAdmin?: boolean;
+}
+
 export interface ServerItem {
   id: string;
   name: string;
@@ -69,6 +77,9 @@ export interface ServerItem {
   inviteCode: string;
   members: string[];
   channels: Channel[];
+  roles?: ServerRole[];
+  memberRoles?: Record<string, string[]>;
+  timeouts?: Record<string, number>;
 }
 
 export interface FriendItem {

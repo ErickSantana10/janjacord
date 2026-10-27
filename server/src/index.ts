@@ -180,6 +180,7 @@ function getUserState(userId: string) {
       displayName: name,
       avatarColor: u?.avatarColor || '#6366f1',
       avatarUrl: u?.avatarUrl,
+      bio: u?.bio,
       currentVoiceChannel: session.currentVoiceChannel,
       currentServerId: session.currentServerId,
       isMuted: session.isMuted,
@@ -195,6 +196,7 @@ function getUserState(userId: string) {
     tag: u.tag || '001',
     avatarColor: u.avatarColor || '#6366f1',
     avatarUrl: u.avatarUrl,
+    bio: u.bio,
   }));
 
   return {
@@ -232,6 +234,7 @@ function broadcastOnlineList() {
       displayName: name,
       avatarColor: u?.avatarColor || '#6366f1',
       avatarUrl: u?.avatarUrl,
+      bio: u?.bio,
       currentVoiceChannel: session.currentVoiceChannel,
       currentServerId: session.currentServerId,
       isMuted: session.isMuted,
@@ -250,6 +253,20 @@ function updateUserFriends(userId: string) {
   for (const [sId, sSession] of onlineSessions.entries()) {
     if (sSession.userId === userId) {
       io.to(sId).emit('friend:list', friends);
+    }
+  }
+}
+
+function isServerAdminOrOwner(server: DBServer, userId: string): boolean {
+  if (server.ownerId === userId) return true;
+  const userRoles = server.memberRoles?.[userId] || [];
+  return (server.roles || []).some((r) => userRoles.includes(r.id) && r.isAdmin);
+}
+
+function broadcastServerUpdated(server: DBServer) {
+  for (const [sId, sSession] of onlineSessions.entries()) {
+    if (server.members.includes(sSession.userId)) {
+      io.to(sId).emit('server:updated', server);
     }
   }
 }
@@ -594,6 +611,15 @@ io.on('connection', (socket: Socket) => {
         { id: `c-txt-${Date.now()}`, serverId, name: 'geral', type: 'text' },
         { id: `c-vox-${Date.now()}`, serverId, name: '🔊 Geral', type: 'voice' },
       ],
+      roles: [
+        { id: 'role-admin', name: 'Administrador', color: '#ef4444', isAdmin: true },
+        { id: 'role-mod', name: 'Moderador', color: '#3b82f6', isAdmin: false },
+        { id: 'role-member', name: 'Membro', color: '#94a3b8', isAdmin: false },
+      ],
+      memberRoles: {
+        [session.userId]: ['role-admin'],
+      },
+      timeouts: {},
     };
 
     db.servers.push(newServer);
@@ -742,6 +768,256 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
+  // 10.2 ATUALIZAR CONFIGURAÇÕES DO SERVIDOR (Nome e Cor do Ícone)
+  socket.on('server:update-settings', ({ serverId, name, iconColor }, callback) => {
+    const session = onlineSessions.get(socket.id);
+    if (!session) return callback?.({ success: false, error: 'Não autenticado.' });
+
+    const db = loadDB();
+    const server = db.servers.find((s) => s.id === serverId);
+    if (!server) return callback?.({ success: false, error: 'Servidor não encontrado.' });
+
+    if (!isServerAdminOrOwner(server, session.userId)) {
+      return callback?.({ success: false, error: 'Você não tem permissão para editar este servidor.' });
+    }
+
+    if (name && name.trim()) server.name = name.trim();
+    if (iconColor) server.iconColor = iconColor;
+
+    saveDB(db);
+    broadcastServerUpdated(server);
+    callback?.({ success: true, server });
+  });
+
+  // 10.3 CRIAR / EDITAR CARGOS
+  socket.on('server:create-role', ({ serverId, name, color, isAdmin }, callback) => {
+    const session = onlineSessions.get(socket.id);
+    if (!session) return callback?.({ success: false, error: 'Não autenticado.' });
+
+    const db = loadDB();
+    const server = db.servers.find((s) => s.id === serverId);
+    if (!server) return callback?.({ success: false, error: 'Servidor não encontrado.' });
+
+    if (!isServerAdminOrOwner(server, session.userId)) {
+      return callback?.({ success: false, error: 'Você não tem permissão para gerenciar cargos.' });
+    }
+
+    if (!server.roles) {
+      server.roles = [
+        { id: 'role-admin', name: 'Administrador', color: '#ef4444', isAdmin: true },
+        { id: 'role-mod', name: 'Moderador', color: '#3b82f6', isAdmin: false },
+        { id: 'role-member', name: 'Membro', color: '#94a3b8', isAdmin: false },
+      ];
+    }
+
+    const cleanName = (name || '').trim();
+    if (!cleanName) return callback?.({ success: false, error: 'Nome do cargo é obrigatório.' });
+
+    const newRole: ServerRole = {
+      id: `role-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+      name: cleanName,
+      color: color || '#818cf8',
+      isAdmin: !!isAdmin,
+    };
+
+    server.roles.push(newRole);
+    saveDB(db);
+    broadcastServerUpdated(server);
+    callback?.({ success: true, server, role: newRole });
+  });
+
+  socket.on('server:delete-role', ({ serverId, roleId }, callback) => {
+    const session = onlineSessions.get(socket.id);
+    if (!session) return callback?.({ success: false, error: 'Não autenticado.' });
+
+    const db = loadDB();
+    const server = db.servers.find((s) => s.id === serverId);
+    if (!server) return callback?.({ success: false, error: 'Servidor não encontrado.' });
+
+    if (!isServerAdminOrOwner(server, session.userId)) {
+      return callback?.({ success: false, error: 'Você não tem permissão para gerenciar cargos.' });
+    }
+
+    server.roles = (server.roles || []).filter((r) => r.id !== roleId);
+    if (server.memberRoles) {
+      for (const mId in server.memberRoles) {
+        server.memberRoles[mId] = server.memberRoles[mId].filter((id) => id !== roleId);
+      }
+    }
+
+    saveDB(db);
+    broadcastServerUpdated(server);
+    callback?.({ success: true, server });
+  });
+
+  // 10.4 ATRIBUIR OU REMOVER CARGO DE MEMBRO
+  socket.on('server:assign-role', ({ serverId, targetUserId, roleId }, callback) => {
+    const session = onlineSessions.get(socket.id);
+    if (!session) return callback?.({ success: false, error: 'Não autenticado.' });
+
+    const db = loadDB();
+    const server = db.servers.find((s) => s.id === serverId);
+    if (!server) return callback?.({ success: false, error: 'Servidor não encontrado.' });
+
+    if (!isServerAdminOrOwner(server, session.userId)) {
+      return callback?.({ success: false, error: 'Você não tem permissão para atribuir cargos.' });
+    }
+
+    if (!server.memberRoles) server.memberRoles = {};
+    if (!server.memberRoles[targetUserId]) server.memberRoles[targetUserId] = [];
+
+    const existingIndex = server.memberRoles[targetUserId].indexOf(roleId);
+    if (existingIndex !== -1) {
+      server.memberRoles[targetUserId].splice(existingIndex, 1);
+    } else {
+      server.memberRoles[targetUserId].push(roleId);
+    }
+
+    saveDB(db);
+    broadcastServerUpdated(server);
+    callback?.({ success: true, server });
+  });
+
+  // 10.5 TIMEOUT / SILENCIAR MEMBRO
+  socket.on('server:timeout-member', ({ serverId, targetUserId, durationMinutes }, callback) => {
+    const session = onlineSessions.get(socket.id);
+    if (!session) return callback?.({ success: false, error: 'Não autenticado.' });
+
+    const db = loadDB();
+    const server = db.servers.find((s) => s.id === serverId);
+    if (!server) return callback?.({ success: false, error: 'Servidor não encontrado.' });
+
+    if (!isServerAdminOrOwner(server, session.userId)) {
+      return callback?.({ success: false, error: 'Você não tem permissão para moderar membros.' });
+    }
+
+    if (targetUserId === server.ownerId) {
+      return callback?.({ success: false, error: 'Não é possível dar timeout no dono do servidor.' });
+    }
+
+    const targetUser = db.users.find((u) => u.id === targetUserId);
+    const targetName = targetUser?.name || 'Membro';
+
+    if (!server.timeouts) server.timeouts = {};
+
+    if (durationMinutes && durationMinutes > 0) {
+      server.timeouts[targetUserId] = Date.now() + durationMinutes * 60 * 1000;
+    } else {
+      delete server.timeouts[targetUserId];
+    }
+
+    saveDB(db);
+    broadcastServerUpdated(server);
+
+    // Anúncio no chat geral
+    const defaultChannel = server.channels.find((c) => c.type === 'text') || server.channels[0];
+    if (defaultChannel) {
+      const sysMsg: DBMessage = {
+        id: Math.random().toString(36).substring(2, 9),
+        serverId: server.id,
+        channelId: defaultChannel.id,
+        userId: 'system',
+        userName: '🛡️ Janjacord Moderação',
+        avatarColor: '#ef4444',
+        text: durationMinutes > 0
+          ? `⏳ **${targetName}** foi silenciado temporariamente por **${durationMinutes} minutos**.`
+          : `🔊 O silenciamento de **${targetName}** foi removido.`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      db.messages.push(sysMsg);
+      saveDB(db);
+
+      for (const [sId, sSession] of onlineSessions.entries()) {
+        if (server.members.includes(sSession.userId)) {
+          io.to(sId).emit('chat:message', sysMsg);
+        }
+      }
+    }
+
+    callback?.({ success: true, server });
+  });
+
+  // 10.6 EXPULSAR MEMBRO (KICK)
+  socket.on('server:kick-member', ({ serverId, targetUserId }, callback) => {
+    const session = onlineSessions.get(socket.id);
+    if (!session) return callback?.({ success: false, error: 'Não autenticado.' });
+
+    const db = loadDB();
+    const server = db.servers.find((s) => s.id === serverId);
+    if (!server) return callback?.({ success: false, error: 'Servidor não encontrado.' });
+
+    if (!isServerAdminOrOwner(server, session.userId)) {
+      return callback?.({ success: false, error: 'Você não tem permissão para expulsar membros.' });
+    }
+
+    if (targetUserId === server.ownerId) {
+      return callback?.({ success: false, error: 'Não é possível expulsar o dono do servidor.' });
+    }
+
+    server.members = server.members.filter((id) => id !== targetUserId);
+    if (server.memberRoles) delete server.memberRoles[targetUserId];
+    if (server.timeouts) delete server.timeouts[targetUserId];
+
+    saveDB(db);
+
+    // Notificar o membro expulso
+    for (const [sId, sSession] of onlineSessions.entries()) {
+      if (sSession.userId === targetUserId) {
+        io.to(sId).emit('server:kicked', { serverId });
+      }
+    }
+
+    broadcastServerUpdated(server);
+    callback?.({ success: true, server });
+  });
+
+  // 10.7 SAIR DO SERVIDOR
+  socket.on('server:leave', ({ serverId }, callback) => {
+    const session = onlineSessions.get(socket.id);
+    if (!session) return callback?.({ success: false, error: 'Não autenticado.' });
+
+    const db = loadDB();
+    const server = db.servers.find((s) => s.id === serverId);
+    if (!server) return callback?.({ success: false, error: 'Servidor não encontrado.' });
+
+    if (server.ownerId === session.userId) {
+      return callback?.({ success: false, error: 'O dono do servidor não pode sair. Exclua o servidor se desejar apagá-lo.' });
+    }
+
+    server.members = server.members.filter((id) => id !== session.userId);
+    if (server.memberRoles) delete server.memberRoles[session.userId];
+    if (server.timeouts) delete server.timeouts[session.userId];
+
+    saveDB(db);
+    socket.emit('server:left', { serverId });
+    broadcastServerUpdated(server);
+    callback?.({ success: true });
+  });
+
+  // 10.8 EXCLUIR SERVIDOR
+  socket.on('server:delete', ({ serverId }, callback) => {
+    const session = onlineSessions.get(socket.id);
+    if (!session) return callback?.({ success: false, error: 'Não autenticado.' });
+
+    const db = loadDB();
+    const sIndex = db.servers.findIndex((s) => s.id === serverId);
+    if (sIndex === -1) return callback?.({ success: false, error: 'Servidor não encontrado.' });
+
+    const server = db.servers[sIndex];
+    if (server.ownerId !== session.userId) {
+      return callback?.({ success: false, error: 'Apenas o dono pode excluir o servidor.' });
+    }
+
+    db.servers.splice(sIndex, 1);
+    db.messages = db.messages.filter((m) => m.serverId !== serverId);
+    saveDB(db);
+
+    for (const [sId] of onlineSessions.entries()) {
+      io.to(sId).emit('server:deleted', { serverId });
+    }
+    callback?.({ success: true });
+  });
+
   // 11. AMIZADES (Adicionar amigos via nome#tag, ex: fulaninho#001)
   socket.on('friend:request', ({ targetUsername, targetIdentifier }, callback) => {
     const session = onlineSessions.get(socket.id);
@@ -865,6 +1141,16 @@ io.on('connection', (socket: Socket) => {
     const server = db.servers.find((s) => s.id === serverId);
 
     if (!user || !server || !server.members.includes(session.userId)) return;
+
+    // Verificar se o usuário está com Timeout ativo no servidor
+    const timeoutExpiry = server.timeouts?.[session.userId];
+    if (timeoutExpiry && timeoutExpiry > Date.now()) {
+      const remainingMinutes = Math.ceil((timeoutExpiry - Date.now()) / 60000);
+      socket.emit('chat:error', {
+        message: `Você está silenciado temporariamente neste servidor por mais ${remainingMinutes} minuto(s).`,
+      });
+      return;
+    }
 
     const newMessage: DBMessage = {
       id: Math.random().toString(36).substring(2, 9),

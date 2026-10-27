@@ -7,6 +7,7 @@ interface ServerMemberListProps {
   currentUser: User | null;
   onlineUsers: OnlineUser[];
   allMembersInfo: ServerMemberInfo[];
+  onSelectMember: (member: any) => void;
 }
 
 export const ServerMemberList: React.FC<ServerMemberListProps> = ({
@@ -14,6 +15,7 @@ export const ServerMemberList: React.FC<ServerMemberListProps> = ({
   currentUser,
   onlineUsers,
   allMembersInfo,
+  onSelectMember,
 }) => {
   const memberIds = server.members || [];
 
@@ -65,6 +67,7 @@ export const ServerMemberList: React.FC<ServerMemberListProps> = ({
               return (
                 <div
                   key={member.id}
+                  onClick={() => onSelectMember(member)}
                   className="flex items-center gap-2.5 px-2 py-1.5 rounded-xl hover:bg-[#1f2132] transition group cursor-pointer"
                   title={isMe ? `${displayName} (Você)` : displayName}
                 >
@@ -145,9 +148,14 @@ export const ServerMemberList: React.FC<ServerMemberListProps> = ({
                 const avatarColor = memberInfo?.avatarColor || '#475569';
                 const avatarUrl = memberInfo?.avatarUrl;
 
+                const u = memberInfo
+                  ? { ...memberInfo, id }
+                  : { id, name: displayName, tag: '001', avatarColor, avatarUrl };
+
                 return (
                   <div
                     key={id}
+                    onClick={() => onSelectMember(u)}
                     className="flex items-center gap-2.5 px-2 py-1.5 rounded-xl opacity-60 hover:opacity-100 hover:bg-[#1f2132] transition group cursor-pointer"
                   >
                     <div className="relative shrink-0">

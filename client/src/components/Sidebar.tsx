@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Hash, 
   Volume2, 
@@ -13,7 +13,9 @@ import {
   LogOut,
   UserPlus,
   Monitor,
-  Film
+  Film,
+  ChevronDown,
+  Sparkles
 } from 'lucide-react';
 import type { Channel, User, ServerItem, FriendItem, OnlineUser } from '../types';
 
@@ -35,6 +37,8 @@ interface SidebarProps {
   onOpenCreateServer: () => void;
   onOpenCreateChannel: (initialType: 'text' | 'voice' | 'media') => void;
   onOpenInviteModal: () => void;
+  onOpenServerSettings: () => void;
+  onLeaveServer: (serverId: string) => void;
   onSelectChannel: (channel: Channel) => void;
   onJoinVoice: (channelId: string, serverId: string) => void;
   onViewVoiceRoom: () => void;
@@ -63,6 +67,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenCreateServer,
   onOpenCreateChannel,
   onOpenInviteModal,
+  onOpenServerSettings,
+  onLeaveServer,
   onSelectChannel,
   onJoinVoice,
   onViewVoiceRoom,
@@ -73,10 +79,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onLogout,
 }) => {
   const isAtHome = currentServer === null;
+  const [isServerMenuOpen, setIsServerMenuOpen] = useState(false);
   const textChannels = currentServer ? currentServer.channels.filter((c) => c.type === 'text') : [];
   const voiceChannels = currentServer ? currentServer.channels.filter((c) => c.type === 'voice') : [];
   const mediaChannels = currentServer ? currentServer.channels.filter((c) => c.type === 'media') : [];
   const acceptedFriends = friends.filter((f) => f.status === 'accepted');
+
+  const isOwner = currentUser?.id === currentServer?.ownerId;
+  const myRoles = currentUser && currentServer ? currentServer.memberRoles?.[currentUser.id] || [] : [];
+  const isAdmin = isOwner || (currentServer?.roles || []).some((r) => myRoles.includes(r.id) && r.isAdmin);
 
   const getServerInitials = (name: string) => {
     const parts = name.trim().split(' ');
@@ -153,18 +164,95 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div>
           {/* Header */}
           {currentServer ? (
-            <div className="h-12 px-3 border-b border-[#222430] flex items-center justify-between font-bold text-slate-200 shadow-sm bg-[#161722]">
-              <span className="flex items-center gap-2 truncate">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="truncate">{currentServer.name}</span>
-              </span>
-              <button
-                onClick={onOpenInviteModal}
-                className="p-1.5 text-indigo-400 hover:text-white hover:bg-indigo-600/30 rounded-lg transition"
-                title="Convidar Amigos"
+            <div className="relative">
+              <div
+                onClick={() => setIsServerMenuOpen(!isServerMenuOpen)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setIsServerMenuOpen(true);
+                }}
+                className="h-12 px-3 border-b border-[#222430] flex items-center justify-between font-bold text-slate-200 shadow-sm bg-[#161722] hover:bg-[#1b1c2b] transition cursor-pointer select-none"
               >
-                <UserPlus className="w-4 h-4" />
-              </button>
+                <span className="flex items-center gap-2 truncate">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                  <span className="truncate text-sm">{currentServer.name}</span>
+                </span>
+                <ChevronDown
+                  className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${
+                    isServerMenuOpen ? 'rotate-180 text-white' : ''
+                  }`}
+                />
+              </div>
+
+              {/* Context Dropdown Menu (Print 1 style) */}
+              {isServerMenuOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-30"
+                    onClick={() => setIsServerMenuOpen(false)}
+                  />
+                  <div className="absolute top-13 left-2 right-2 z-40 bg-[#111218] border border-[#242638] rounded-2xl shadow-2xl p-1.5 space-y-0.5 animate-in fade-in duration-150">
+                    <button
+                      onClick={() => {
+                        setIsServerMenuOpen(false);
+                        alert(`✨ O servidor "${currentServer.name}" está no nível de impulso máximo!`);
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-fuchsia-400 hover:bg-fuchsia-500/10 hover:text-fuchsia-300 transition cursor-pointer"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      <span>Impulso de Servidor</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setIsServerMenuOpen(false);
+                        onOpenInviteModal();
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-indigo-400 hover:bg-indigo-600/15 hover:text-indigo-300 transition cursor-pointer"
+                    >
+                      <UserPlus className="w-4 h-4" />
+                      <span>Convidar Pessoas</span>
+                    </button>
+
+                    {isAdmin && (
+                      <button
+                        onClick={() => {
+                          setIsServerMenuOpen(false);
+                          onOpenServerSettings();
+                        }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-200 hover:bg-[#1e2030] hover:text-white transition cursor-pointer"
+                      >
+                        <Settings className="w-4 h-4 text-slate-400" />
+                        <span>Configurações do Servidor</span>
+                      </button>
+                    )}
+
+                    <button
+                      onClick={() => {
+                        setIsServerMenuOpen(false);
+                        onOpenCreateChannel('text');
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-200 hover:bg-[#1e2030] hover:text-white transition cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4 text-slate-400" />
+                      <span>Criar Canal</span>
+                    </button>
+
+                    <div className="my-1 border-t border-[#1f2130]" />
+
+                    <button
+                      onClick={() => {
+                        setIsServerMenuOpen(false);
+                        onLeaveServer(currentServer.id);
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      <span>Sair do Servidor</span>
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           ) : (
             <div className="h-12 px-4 border-b border-[#222430] flex items-center justify-between font-bold text-slate-200 shadow-sm">
