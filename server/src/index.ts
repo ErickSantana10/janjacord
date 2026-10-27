@@ -1291,6 +1291,10 @@ io.on('connection', (socket: Socket) => {
         listeners: [],
       };
       mediaRooms.set(channelId, state);
+    } else if (state.isPlaying && state.currentTrack) {
+      const elapsed = Math.max(0, (Date.now() - state.updatedAt) / 1000);
+      state.currentTime = (state.currentTime || 0) + elapsed;
+      state.updatedAt = Date.now();
     }
     callback?.({ success: true, state });
   });
@@ -1312,12 +1316,16 @@ io.on('connection', (socket: Socket) => {
         listeners: [],
       };
       mediaRooms.set(channelId, state);
+    } else if (state.isPlaying && state.currentTrack) {
+      const elapsed = Math.max(0, (Date.now() - state.updatedAt) / 1000);
+      state.currentTime = (state.currentTime || 0) + elapsed;
+      state.updatedAt = Date.now();
     }
 
     if (!state.listeners.includes(session.userId)) {
       state.listeners.push(session.userId);
-      io.emit('media:state-updated', state);
     }
+    io.emit('media:state-updated', state);
   });
 
   socket.on('media:leave-room', ({ channelId }: { channelId: string }) => {
@@ -1540,14 +1548,15 @@ io.on('connection', (socket: Socket) => {
     callback?.({ success: true, state });
   });
 
-  socket.on('media:sync-action', ({ channelId, action, time }: { channelId: string; action: 'play' | 'pause' | 'skip' | 'seek'; time?: number }) => {
+  socket.on('media:sync-action', ({ channelId, action, time, userId }: { channelId: string; action: 'play' | 'pause' | 'skip' | 'seek'; time?: number; userId?: string }) => {
     const session = onlineSessions.get(socket.id);
-    if (!session) return;
+    const callerUserId = session?.userId || userId;
+    if (!callerUserId) return;
 
     const state = mediaRooms.get(channelId);
     if (!state || !state.currentTrack) return;
 
-    const isTrackOwner = state.currentTrack.addedBy.id === session.userId;
+    const isTrackOwner = state.currentTrack.addedBy.id === callerUserId;
     const ownerOnlineInRoom = state.listeners.includes(state.currentTrack.addedBy.id);
 
     // Apenas a pessoa que adicionou o vídeo/música atual pode pausar, retomar ou avançar o tempo
@@ -1561,18 +1570,21 @@ io.on('connection', (socket: Socket) => {
         state.currentTime = Math.max(0, time);
       }
       state.updatedAt = Date.now();
+      (state as any).actionSeq = Date.now();
     } else if (action === 'pause') {
-      if (state.isPlaying) {
+      if (typeof time === 'number' && !isNaN(time) && (time > 0.5 || state.currentTime < 2)) {
+        state.currentTime = Math.max(0, time);
+      } else if (state.isPlaying) {
         const elapsed = Math.max(0, (Date.now() - state.updatedAt) / 1000);
-        state.currentTime = typeof time === 'number' && time > 0.5 ? time : state.currentTime + elapsed;
-      } else if (typeof time === 'number' && time > 0.5) {
-        state.currentTime = time;
+        state.currentTime = (state.currentTime || 0) + elapsed;
       }
       state.isPlaying = false;
       state.updatedAt = Date.now();
+      (state as any).actionSeq = Date.now();
     } else if (action === 'seek' && typeof time === 'number' && !isNaN(time)) {
       state.currentTime = Math.max(0, time);
       state.updatedAt = Date.now();
+      (state as any).actionSeq = Date.now();
     } else if (action === 'skip') {
       // Skip automático ao fim do vídeo: aceita do dono da faixa (ou de qualquer ouvinte se o dono saiu da sala)
       if (!isTrackOwner && ownerOnlineInRoom) {
@@ -1590,27 +1602,32 @@ io.on('connection', (socket: Socket) => {
         state.currentTime = 0;
         state.updatedAt = Date.now();
       }
+      (state as any).actionSeq = Date.now();
     }
 
     io.emit('media:state-updated', state);
   });
 
-  // Heartbeat contínuo enviado pelo dono do vídeo atual para manter o tempo de todo mundo 100% sincronizado
-  socket.on('media:heartbeat', ({ channelId, currentTime, isPlaying }: { channelId: string; currentTime: number; isPlaying: boolean }) => {
+  // Heartbeat contínuo enviado pelo dono do vídeo atual para manter o tempo e play/pause de todo mundo 100% sincronizado
+  socket.on('media:heartbeat', ({ channelId, currentTime, isPlaying, userId }: { channelId: string; currentTime: number; isPlaying: boolean; userId?: string }) => {
     const session = onlineSessions.get(socket.id);
-    if (!session) return;
+    const callerUserId = session?.userId || userId;
+    if (!callerUserId) return;
 
     const state = mediaRooms.get(channelId);
     if (!state || !state.currentTrack) return;
 
     // Apenas o responsável por colocar o vídeo atual é a referência de tempo
-    if (state.currentTrack.addedBy.id !== session.userId) return;
+    if (state.currentTrack.addedBy.id !== callerUserId) return;
 
-    // Ignora heartbeats com tempo zerado por buffering ou quando pausado
-    if (!state.isPlaying || !isPlaying) return;
-    if (typeof currentTime !== 'number' || isNaN(currentTime) || currentTime <= 0.5) return;
+    if (typeof currentTime !== 'number' || isNaN(currentTime)) return;
+    // Evita zerar o tempo caso o YouTube reporte 0 durante buffering
+    if (currentTime <= 0.5 && state.currentTime > 3) return;
 
     state.currentTime = Math.max(0, currentTime);
+    if (typeof isPlaying === 'boolean') {
+      state.isPlaying = isPlaying;
+    }
     state.updatedAt = Date.now();
 
     // Envia para todos os espectadores exceto o próprio dono que enviou o heartbeat

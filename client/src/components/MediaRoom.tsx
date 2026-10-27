@@ -69,14 +69,17 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
   const isMutedRef = useRef<boolean>(false);
   const mediaStateRef = useRef<MediaRoomState | null>(mediaState);
 
-  // Refs de proteção contra loop de seek / buffering do YouTube
+  // Refs de proteção contra loop de seek / buffering do YouTube e diferença de relógio entre PCs
   const lastOwnerSeekAtRef = useRef<number>(0);
   const lastOwnerSeekTargetRef = useRef<number>(0);
   const lastViewerSeekAtRef = useRef<number>(0);
   const lastViewerSeekTargetRef = useRef<number>(0);
+  const stateReceivedAtRef = useRef<number>(Date.now());
+  const lastActionSeqRef = useRef<number>(0);
 
   useEffect(() => {
     mediaStateRef.current = mediaState;
+    stateReceivedAtRef.current = Date.now();
   }, [mediaState]);
 
   // Verifica se o usuário atual foi quem colocou o vídeo/música que está tocando
@@ -135,8 +138,14 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
     }
 
     const { videoId } = state.currentTrack;
-    const elapsed = state.isPlaying ? Math.max(0, (Date.now() - state.updatedAt) / 1000) : 0;
-    const targetTime = Math.max(0, (state.currentTime || 0) + elapsed);
+    // Usa diretamente o state.currentTime enviado pelo servidor no instante em que o pacote chega,
+    // sem somar (Date.now() - state.updatedAt), pois o relógio do Windows de cada PC pode ter minutos de diferença!
+    const targetTime = Math.max(0, state.currentTime || 0);
+    const actionSeq = (state as any).actionSeq || 0;
+    const isExplicitOwnerAction = actionSeq > 0 && actionSeq !== lastActionSeqRef.current;
+    if (actionSeq > 0) {
+      lastActionSeqRef.current = actionSeq;
+    }
 
     if (!(window as any).YT || !(window as any).YT.Player) {
       return;
@@ -166,33 +175,40 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
         }
       } else {
         // Mesmo vídeo:
-        // IMPORTANTE: Se este cliente é o DONO do vídeo (isTrackOwner), NÃO fazemos seekTo em resposta ao eco do servidor,
-        // pois o próprio dono já executou a ação localmente. Isso evita o loop 03:09 -> 00:00 -> 03:10!
+        // Se este cliente é o DONO do vídeo (isTrackOwner), NÃO fazemos seekTo em resposta ao eco do servidor
         if (isTrackOwnerRef.current) {
           return;
         }
 
-        // Espectadores (!isTrackOwner): sincroniza com o estado oficial do servidor
+        // Espectadores (!isTrackOwner): sincroniza imediatamente com o estado oficial do DJ
         try {
           const curTime = playerRef.current.getCurrentTime ? playerRef.current.getCurrentTime() : 0;
           const playerState = playerRef.current.getPlayerState ? playerRef.current.getPlayerState() : -1;
 
-          // Se o dono mudou o tempo (seek explícito) ou se o espectador está fora de sincronia (com debounce de 3s)
-          const targetJumped = Math.abs(targetTime - lastViewerSeekTargetRef.current) > 2.2;
-          const cooldownPassed = Date.now() - lastViewerSeekAtRef.current > 3000;
-
-          if (Math.abs(curTime - targetTime) > 2.0 && (targetJumped || cooldownPassed)) {
-            lastViewerSeekAtRef.current = Date.now();
-            lastViewerSeekTargetRef.current = targetTime;
+          if (!state.isPlaying) {
+            // Se o DJ pausou o vídeo, pausa imediatamente no espectador e crava no segundo exato (ex: 2:20)!
+            if (playerState === 1) {
+              playerRef.current.pauseVideo?.();
+            }
             setPlayerCurrentTime(targetTime);
-            playerRef.current.seekTo(targetTime, true);
-          }
-
-          // 1 = PLAYING, 2 = PAUSED, 3 = BUFFERING
-          if (state.isPlaying && playerState !== 1 && playerState !== 3) {
-            playerRef.current.playVideo?.();
-          } else if (!state.isPlaying && playerState === 1) {
-            playerRef.current.pauseVideo?.();
+            if (Math.abs(curTime - targetTime) > 0.8 && (isExplicitOwnerAction || Date.now() - lastViewerSeekAtRef.current > 1800)) {
+              lastViewerSeekAtRef.current = Date.now();
+              lastViewerSeekTargetRef.current = targetTime;
+              playerRef.current.seekTo(targetTime, true);
+              setTimeout(() => playerRef.current?.pauseVideo?.(), 150);
+            }
+          } else {
+            // Vídeo está tocando: se o DJ deu play/seek explícito ou se desviou > 1.8s, sincroniza
+            const cooldownPassed = Date.now() - lastViewerSeekAtRef.current > 2500;
+            if (isExplicitOwnerAction || (Math.abs(curTime - targetTime) > 1.8 && cooldownPassed)) {
+              lastViewerSeekAtRef.current = Date.now();
+              lastViewerSeekTargetRef.current = targetTime;
+              setPlayerCurrentTime(targetTime);
+              playerRef.current.seekTo(targetTime, true);
+            }
+            if (playerState !== 1 && playerState !== 3) {
+              playerRef.current.playVideo?.();
+            }
           }
         } catch (err) {
           console.warn('Erro ao sincronizar player:', err);
@@ -230,8 +246,10 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
               event.target.setVolume(isMutedRef.current ? 0 : volumeRef.current);
               const latestState = mediaStateRef.current;
               if (latestState?.currentTrack) {
-                const el = latestState.isPlaying ? Math.max(0, (Date.now() - latestState.updatedAt) / 1000) : 0;
-                const syncTarget = Math.max(0, (latestState.currentTime || 0) + el);
+                const localElapsed = latestState.isPlaying
+                  ? Math.max(0, (Date.now() - stateReceivedAtRef.current) / 1000)
+                  : 0;
+                const syncTarget = Math.max(0, (latestState.currentTime || 0) + localElapsed);
                 lastOwnerSeekTargetRef.current = syncTarget;
                 lastViewerSeekTargetRef.current = syncTarget;
                 setPlayerCurrentTime(syncTarget);
@@ -316,31 +334,45 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
         }
 
         // Para espectadores (!isTrackOwner):
-        const elapsed = state.isPlaying ? Math.max(0, (Date.now() - state.updatedAt) / 1000) : 0;
-        const expectedTime = Math.max(0, (state.currentTime || 0) + elapsed);
+        // Calcula o tempo decorrido usando APENAS o relógio local desde que o pacote chegou (zero erro de fuso/relógio entre PCs!)
+        const localElapsed = state.isPlaying ? Math.max(0, (Date.now() - stateReceivedAtRef.current) / 1000) : 0;
+        const expectedTime = Math.max(0, (state.currentTime || 0) + localElapsed);
 
-        if (!isSeeking) {
-          setPlayerCurrentTime(cur > 0.5 ? cur : expectedTime);
-        }
-
-        // Só corrige drift se não estiver em buffering (3) e respeitando intervalo mínimo de 3.5s entre seeks
-        if (
-          playerState !== 3 &&
-          Date.now() - lastViewerSeekAtRef.current > 3500 &&
-          dur > 0 &&
-          expectedTime < dur - 1.5 &&
-          Math.abs(cur - expectedTime) > 2.2
-        ) {
-          lastViewerSeekAtRef.current = Date.now();
-          lastViewerSeekTargetRef.current = expectedTime;
-          player.seekTo(expectedTime, true);
-        }
-
-        // Garante estado Play/Pause sincronizado nos espectadores
-        if (state.isPlaying && playerState !== 1 && playerState !== 3) {
-          player.playVideo?.();
-        } else if (!state.isPlaying && playerState === 1) {
-          player.pauseVideo?.();
+        if (!state.isPlaying) {
+          // Quando pausado pelo dono, mostra exatamente o tempo em que o dono pausou (ex: 2:20)
+          setPlayerCurrentTime(state.currentTime || 0);
+          if (playerState === 1) {
+            player.pauseVideo?.();
+          }
+          if (
+            playerState !== 3 &&
+            Date.now() - lastViewerSeekAtRef.current > 2000 &&
+            Math.abs(cur - (state.currentTime || 0)) > 1.2
+          ) {
+            lastViewerSeekAtRef.current = Date.now();
+            lastViewerSeekTargetRef.current = state.currentTime || 0;
+            player.seekTo(state.currentTime || 0, true);
+            setTimeout(() => player.pauseVideo?.(), 150);
+          }
+        } else {
+          // Quando reproduzindo
+          if (!isSeeking) {
+            setPlayerCurrentTime(cur > 0.5 ? cur : expectedTime);
+          }
+          if (playerState !== 1 && playerState !== 3) {
+            player.playVideo?.();
+          }
+          if (
+            playerState !== 3 &&
+            Date.now() - lastViewerSeekAtRef.current > 3000 &&
+            dur > 0 &&
+            expectedTime < dur - 1.5 &&
+            Math.abs(cur - expectedTime) > 2.0
+          ) {
+            lastViewerSeekAtRef.current = Date.now();
+            lastViewerSeekTargetRef.current = expectedTime;
+            player.seekTo(expectedTime, true);
+          }
         }
       } catch (e) {}
     }, 1000);
@@ -348,27 +380,32 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
     return () => clearInterval(syncTimer);
   }, [isSeeking]);
 
-  // Heartbeat do dono do vídeo: só envia quando está EFETIVAMENTE tocando (playerState === 1)
-  // e pelo menos 3.5s após qualquer pausa/seek manual, impedindo envio de 0:00 durante buffering
+  // Heartbeat do dono do vídeo: envia o tempo exato (tanto tocando quanto pausado) a cada 2s para manter todos cravados
   useEffect(() => {
     if (!isTrackOwner || !mediaState?.currentTrack) return;
 
     const heartbeatTimer = setInterval(() => {
       const player = playerRef.current;
       const state = mediaStateRef.current;
-      if (!player || !state?.currentTrack || !state.isPlaying) return;
-      if (isSeeking || Date.now() - lastOwnerSeekAtRef.current < 3500) return;
+      if (!player || !state?.currentTrack) return;
+      if (isSeeking || Date.now() - lastOwnerSeekAtRef.current < 2500) return;
 
       try {
         const playerState = player.getPlayerState ? player.getPlayerState() : -1;
         const cur = player.getCurrentTime ? player.getCurrentTime() : 0;
-        // Só envia se estiver reproduzindo ativamente (1) e com tempo válido (> 1s)
-        if (playerState === 1 && cur > 1) {
-          lastOwnerSeekTargetRef.current = cur;
-          onHeartbeat?.(cur, true);
+
+        if (state.isPlaying) {
+          if (playerState === 1 && cur > 0.5) {
+            lastOwnerSeekTargetRef.current = cur;
+            onHeartbeat?.(cur, true);
+          }
+        } else {
+          // Quando pausado pelo dono, envia o tempo pausado confiável para que qualquer amigo fique cravado no mesmo segundo
+          const pausedTime = cur > 0.5 ? cur : lastOwnerSeekTargetRef.current;
+          onHeartbeat?.(pausedTime, false);
         }
       } catch (e) {}
-    }, 2500);
+    }, 2000);
 
     return () => clearInterval(heartbeatTimer);
   }, [isTrackOwner, mediaState?.currentTrack?.id, isSeeking]);

@@ -121,30 +121,44 @@ export const App: React.FC = () => {
       socket.emit('user:update-state', { isScreenSharing: false });
     };
 
-    // Auto resume saved user session
-    const savedUserId = localStorage.getItem('janjacord_user_id');
-    if (savedUserId) {
-      socket.emit('auth:session', { userId: savedUserId }, (res: { success: boolean; user?: any; state?: any }) => {
-        if (res.success && res.user && res.state) {
-          const u: User = {
-            ...res.user,
-            name: res.user.name || res.user.displayName || res.user.username,
-            tag: res.user.tag || '001',
-          };
-          setCurrentUser(u);
-          setServers(res.state.servers || []);
-          setAllServerMembers(res.state.allServerMembers || []);
-          setMessages(res.state.messages || []);
-          setDmMessages(res.state.dmMessages || []);
-          setFriends(res.state.friends || []);
-          setOnlineUsers(res.state.onlineUsers || []);
-          setIsAuthenticated(true);
-        } else {
-          localStorage.removeItem('janjacord_user_id');
-          setIsAuthenticated(false);
-        }
-      });
-    }
+    // Auto resume saved user session (e re-autentica automaticamente se o servidor reiniciar ou reconectar)
+    const restoreSession = () => {
+      const savedUserId = localStorage.getItem('janjacord_user_id');
+      if (savedUserId) {
+        socket.emit('auth:session', { userId: savedUserId }, (res: { success: boolean; user?: any; state?: any }) => {
+          if (res.success && res.user && res.state) {
+            const u: User = {
+              ...res.user,
+              name: res.user.name || res.user.displayName || res.user.username,
+              tag: res.user.tag || '001',
+            };
+            setCurrentUser(u);
+            setServers(res.state.servers || []);
+            setAllServerMembers(res.state.allServerMembers || []);
+            setMessages(res.state.messages || []);
+            setDmMessages(res.state.dmMessages || []);
+            setFriends(res.state.friends || []);
+            setOnlineUsers(res.state.onlineUsers || []);
+            setIsAuthenticated(true);
+
+            if (activeChannelRef.current?.type === 'media') {
+              socket.emit('media:join-room', { channelId: activeChannelRef.current.id });
+              socket.emit('media:get-state', { channelId: activeChannelRef.current.id }, (mRes: any) => {
+                if (mRes?.success && mRes.state) {
+                  setMediaRoomState(mRes.state);
+                }
+              });
+            }
+          } else {
+            localStorage.removeItem('janjacord_user_id');
+            setIsAuthenticated(false);
+          }
+        });
+      }
+    };
+
+    restoreSession();
+    socket.on('connect', restoreSession);
 
     // Real-time events
     socket.on('online:list', (list: OnlineUser[]) => {
@@ -500,12 +514,22 @@ export const App: React.FC = () => {
 
   const handleMediaSyncAction = (action: 'play' | 'pause' | 'skip' | 'seek', time?: number) => {
     if (!activeChannel) return;
-    socketRef.current?.emit('media:sync-action', { channelId: activeChannel.id, action, time });
+    socketRef.current?.emit('media:sync-action', {
+      channelId: activeChannel.id,
+      action,
+      time,
+      userId: currentUser?.id,
+    });
   };
 
   const handleMediaHeartbeat = (currentTime: number, isPlaying: boolean) => {
     if (!activeChannel) return;
-    socketRef.current?.emit('media:heartbeat', { channelId: activeChannel.id, currentTime, isPlaying });
+    socketRef.current?.emit('media:heartbeat', {
+      channelId: activeChannel.id,
+      currentTime,
+      isPlaying,
+      userId: currentUser?.id,
+    });
   };
 
   const handleVoteSkip = () => {
