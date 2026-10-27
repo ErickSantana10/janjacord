@@ -1,0 +1,11 @@
+{
+  "name": "janjacord",
+  "version": "1.0.0",
+  "description": "Janjacord - Discord 2 Ultra-Leve",
+  "private": true,
+  "scripts": {
+    "start:server": "cd server && npm run dev",
+    "start:client": "cd client && npm run dev",
+    "dev": "npm run start:server"
+  }
+}
