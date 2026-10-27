@@ -57,6 +57,8 @@ export interface MediaRoomState {
   isPlaying: boolean;
   currentTime: number;
   updatedAt: number;
+  skipVotes: string[];
+  listeners: string[];
 }
 
 export interface ServerItem {

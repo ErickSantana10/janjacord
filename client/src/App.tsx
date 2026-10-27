@@ -383,6 +383,15 @@ export const App: React.FC = () => {
   };
 
   // Media Room Handlers (Watch Together & Music DJ)
+  useEffect(() => {
+    if (activeChannel?.type === 'media') {
+      socketRef.current?.emit('media:join-room', { channelId: activeChannel.id });
+      return () => {
+        socketRef.current?.emit('media:leave-room', { channelId: activeChannel.id });
+      };
+    }
+  }, [activeChannel?.id, activeChannel?.type]);
+
   const handlePlayMedia = (url: string, title?: string) => {
     if (!activeChannel) return;
     socketRef.current?.emit('media:play', { channelId: activeChannel.id, url, inputUrl: url, title }, (res: any) => {
@@ -395,6 +404,15 @@ export const App: React.FC = () => {
   const handleMediaSyncAction = (action: 'play' | 'pause' | 'skip' | 'seek', time?: number) => {
     if (!activeChannel) return;
     socketRef.current?.emit('media:sync-action', { channelId: activeChannel.id, action, time });
+  };
+
+  const handleVoteSkip = () => {
+    if (!activeChannel) return;
+    socketRef.current?.emit('media:vote-skip', { channelId: activeChannel.id }, (res: any) => {
+      if (res?.error) {
+        alert(res.error);
+      }
+    });
   };
 
   const handleJoinByInvite = (inviteCode: string, callback?: (error?: string) => void) => {
@@ -784,6 +802,7 @@ export const App: React.FC = () => {
             onSendMessage={handleSendMessage}
             onPlayMedia={handlePlayMedia}
             onSyncAction={handleMediaSyncAction}
+            onVoteSkip={handleVoteSkip}
           />
         ) : currentServer && activeChannel ? (
           /* If user is inside a server's text channel (can be talking in voice at the same time!) */

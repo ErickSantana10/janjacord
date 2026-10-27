@@ -11,7 +11,8 @@ import {
   Plus,
   Send,
   Maximize2,
-  Music2
+  Music2,
+  Users
 } from 'lucide-react';
 import type { Channel, Message, User, MediaRoomState, MessageAttachment } from '../types';
 
@@ -23,15 +24,18 @@ interface MediaRoomProps {
   onSendMessage: (text: string, attachment?: MessageAttachment) => void;
   onPlayMedia: (url: string, title?: string) => void;
   onSyncAction: (action: 'play' | 'pause' | 'skip' | 'seek', time?: number) => void;
+  onVoteSkip: () => void;
 }
 
 export const MediaRoom: React.FC<MediaRoomProps> = ({
   channel,
+  currentUser,
   mediaState,
   messages,
   onSendMessage,
   onPlayMedia,
   onSyncAction,
+  onVoteSkip,
 }) => {
   const [activeTab, setActiveTab] = useState<'queue' | 'chat'>('queue');
   const [urlInput, setUrlInput] = useState('');
@@ -47,6 +51,14 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastVideoIdRef = useRef<string | null>(null);
+
+  // Votação para pular (50% + 1)
+  const skipVotes = mediaState?.skipVotes || [];
+  const listeners = mediaState?.listeners || [];
+  const totalListeners = Math.max(1, listeners.length);
+  const requiredVotes = Math.floor(totalListeners / 2) + 1;
+  const currentVoteCount = skipVotes.length;
+  const hasUserVoted = currentUser ? skipVotes.includes(currentUser.id) : false;
 
   // Filter messages for this media channel
   const channelMessages = messages.filter((m) => m.channelId === channel.id);
@@ -228,6 +240,13 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
       return;
     }
 
+    // Check for /skip or /pular or /voteskip command
+    if (/^\/(?:skip|pular|voteskip)$/i.test(text)) {
+      onVoteSkip();
+      setChatInput('');
+      return;
+    }
+
     onSendMessage(text);
     setChatInput('');
   };
@@ -243,7 +262,7 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
   };
 
   const handleSkip = () => {
-    onSyncAction('skip');
+    onVoteSkip();
   };
 
   const handleVolumeChange = (newVol: number) => {
@@ -303,6 +322,22 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
           </div>
 
           <div className="flex items-center gap-2 text-xs text-slate-400">
+            {/* Active Listeners count */}
+            <span
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#181926] border border-[#27293d] text-slate-300 font-semibold"
+              title="Pessoas conectadas nesta sala"
+            >
+              <Users className="w-3.5 h-3.5 text-indigo-400" />
+              <span>{totalListeners} {totalListeners === 1 ? 'ouvindo' : 'ouvindo'}</span>
+            </span>
+
+            {/* Vote Skip Indicator Pill */}
+            {mediaState?.currentTrack && currentVoteCount > 0 && (
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 font-bold animate-pulse">
+                🗳️ Pular: {currentVoteCount}/{requiredVotes}
+              </span>
+            )}
+
             {mediaState?.currentTrack ? (
               <span className="flex items-center gap-1.5 text-emerald-400 font-semibold bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
@@ -416,10 +451,17 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
               <button
                 onClick={handleSkip}
                 disabled={!mediaState?.currentTrack}
-                className="p-2.5 rounded-xl text-slate-300 hover:text-white hover:bg-[#1e1f2b] disabled:opacity-30 transition cursor-pointer"
-                title="Pular para a próxima faixa"
+                className={`px-3 py-2 rounded-xl flex items-center gap-1.5 text-xs font-bold transition cursor-pointer disabled:opacity-30 ${
+                  hasUserVoted
+                    ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/20'
+                    : 'text-slate-300 hover:text-white hover:bg-[#1e1f2b]'
+                }`}
+                title={`Votação para pular música (50% + 1): ${currentVoteCount} de ${requiredVotes} votos necessários`}
               >
-                <SkipForward className="w-5 h-5" />
+                <SkipForward className="w-4 h-4" />
+                <span>
+                  {hasUserVoted ? 'Votado' : 'Pular'} ({currentVoteCount}/{requiredVotes})
+                </span>
               </button>
             </div>
 
@@ -548,6 +590,44 @@ export const MediaRoom: React.FC<MediaRoomProps> = ({
                       </span>
                     </div>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* Votação para Pular (50% + 1) */}
+            {mediaState?.currentTrack && (
+              <div className="mb-3 p-3 bg-[#181926] border border-[#27293d] rounded-2xl space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-slate-300 flex items-center gap-1.5">
+                    <span>🗳️ Votação para Pular</span>
+                  </span>
+                  <span className="text-[11px] font-mono font-bold text-amber-400">
+                    {currentVoteCount} de {requiredVotes} votos
+                  </span>
+                </div>
+
+                {/* Barra de progresso */}
+                <div className="w-full bg-[#101118] h-2 rounded-full overflow-hidden">
+                  <div
+                    className="bg-amber-500 h-full transition-all duration-300"
+                    style={{ width: `${Math.min(100, (currentVoteCount / requiredVotes) * 100)}%` }}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-0.5">
+                  <span className="text-[10px] text-slate-400">
+                    Regra: 50% + 1 ({totalListeners} {totalListeners === 1 ? 'pessoa' : 'pessoas'} na sala)
+                  </span>
+                  <button
+                    onClick={onVoteSkip}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                      hasUserVoted
+                        ? 'bg-amber-500 text-black hover:bg-amber-400'
+                        : 'bg-[#222435] text-slate-300 hover:text-white hover:bg-[#2c2f47]'
+                    }`}
+                  >
+                    {hasUserVoted ? 'Retirar Voto' : 'Votar para Pular'}
+                  </button>
                 </div>
               </div>
             )}

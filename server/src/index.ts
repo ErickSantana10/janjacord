@@ -49,6 +49,8 @@ export interface MediaRoomState {
   isPlaying: boolean;
   currentTime: number;
   updatedAt: number;
+  skipVotes: string[];
+  listeners: string[];
 }
 
 const mediaRooms = new Map<string, MediaRoomState>();
@@ -472,6 +474,8 @@ io.on('connection', (socket: Socket) => {
         isPlaying: false,
         currentTime: 0,
         updatedAt: Date.now(),
+        skipVotes: [],
+        listeners: [],
       });
     }
 
@@ -986,7 +990,7 @@ io.on('connection', (socket: Socket) => {
     io.to(toPeerId).emit('webrtc:ice-candidate', { fromPeerId: socket.id, candidate });
   });
 
-  // 14. SALA DE MÚSICA & VÍDEO COMPARTILHADO (YouTube Sincronizado)
+  // 14. SALA DE MÚSICA & VÍDEO COMPARTILHADO (YouTube Sincronizado & Votação)
   socket.on('media:get-state', ({ channelId }: { channelId: string }, callback) => {
     let state = mediaRooms.get(channelId);
     if (!state) {
@@ -997,10 +1001,152 @@ io.on('connection', (socket: Socket) => {
         isPlaying: false,
         currentTime: 0,
         updatedAt: Date.now(),
+        skipVotes: [],
+        listeners: [],
       };
       mediaRooms.set(channelId, state);
     }
     callback?.({ success: true, state });
+  });
+
+  socket.on('media:join-room', ({ channelId }: { channelId: string }) => {
+    const session = onlineSessions.get(socket.id);
+    if (!session) return;
+
+    let state = mediaRooms.get(channelId);
+    if (!state) {
+      state = {
+        channelId,
+        currentTrack: null,
+        queue: [],
+        isPlaying: false,
+        currentTime: 0,
+        updatedAt: Date.now(),
+        skipVotes: [],
+        listeners: [],
+      };
+      mediaRooms.set(channelId, state);
+    }
+
+    if (!state.listeners.includes(session.userId)) {
+      state.listeners.push(session.userId);
+      io.emit('media:state-updated', state);
+    }
+  });
+
+  socket.on('media:leave-room', ({ channelId }: { channelId: string }) => {
+    const session = onlineSessions.get(socket.id);
+    if (!session) return;
+
+    const state = mediaRooms.get(channelId);
+    if (state) {
+      state.listeners = state.listeners.filter((id) => id !== session.userId);
+      state.skipVotes = state.skipVotes.filter((id) => id !== session.userId);
+
+      // Se a contagem de ouvintes diminuiu, verifica se os votos existentes já batem 50% + 1
+      if (state.currentTrack && state.listeners.length > 0) {
+        const needed = Math.floor(state.listeners.length / 2) + 1;
+        if (state.skipVotes.length >= needed) {
+          state.currentTrack = state.queue.shift() || null;
+          state.isPlaying = !!state.currentTrack;
+          state.currentTime = 0;
+          state.updatedAt = Date.now();
+          state.skipVotes = [];
+        }
+      }
+      io.emit('media:state-updated', state);
+    }
+  });
+
+  socket.on('media:vote-skip', ({ channelId }: { channelId: string }, callback) => {
+    const session = onlineSessions.get(socket.id);
+    if (!session) return callback?.({ success: false, error: 'Não autenticado.' });
+
+    const db = loadDB();
+    const user = db.users.find((u) => u.id === session.userId);
+    if (!user) return callback?.({ success: false, error: 'Usuário não encontrado.' });
+
+    const state = mediaRooms.get(channelId);
+    if (!state || !state.currentTrack) {
+      return callback?.({ success: false, error: 'Nenhuma música tocando no momento.' });
+    }
+
+    // Garante que o usuário está contado nos ouvintes
+    if (!state.listeners.includes(user.id)) {
+      state.listeners.push(user.id);
+    }
+
+    const userName = user.name || (user as any).displayName || 'Membro';
+    const totalListeners = Math.max(1, state.listeners.length);
+    // Regra da Votação: 50% + 1 das pessoas ouvindo/assistindo
+    const neededVotes = Math.floor(totalListeners / 2) + 1;
+
+    const alreadyVoted = state.skipVotes.includes(user.id);
+    if (alreadyVoted) {
+      state.skipVotes = state.skipVotes.filter((id) => id !== user.id);
+    } else {
+      state.skipVotes.push(user.id);
+    }
+
+    const currentVotes = state.skipVotes.length;
+    const targetChannel = db.servers.flatMap((s) => s.channels).find((c) => c.id === channelId);
+    const server = targetChannel ? db.servers.find((s) => s.id === targetChannel.serverId) : null;
+
+    if (currentVotes >= neededVotes) {
+      // 50% + 1 alcançado! Pula para a próxima música
+      const skippedTrackTitle = state.currentTrack.title;
+      state.currentTrack = state.queue.shift() || null;
+      state.isPlaying = !!state.currentTrack;
+      state.currentTime = 0;
+      state.updatedAt = Date.now();
+      state.skipVotes = [];
+
+      if (server) {
+        const sysMsg: DBMessage = {
+          id: Math.random().toString(36).substring(2, 9),
+          serverId: server.id,
+          channelId,
+          userId: 'system',
+          userName: '🎵 Janjacord DJ',
+          avatarColor: '#f59e0b',
+          text: `⏭️ **Votação Aprovada (${currentVotes}/${neededVotes})!** A música "${skippedTrackTitle}" foi pulada pela maioria (50%+1).`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        };
+        db.messages.push(sysMsg);
+        saveDB(db);
+
+        for (const [sId, sSession] of onlineSessions.entries()) {
+          if (server.members.includes(sSession.userId)) {
+            io.to(sId).emit('chat:message', sysMsg);
+          }
+        }
+      }
+    } else {
+      if (server) {
+        const actionText = alreadyVoted ? 'retirou o voto para pular' : 'votou para pular a música';
+        const sysMsg: DBMessage = {
+          id: Math.random().toString(36).substring(2, 9),
+          serverId: server.id,
+          channelId,
+          userId: 'system',
+          userName: '🎵 Janjacord DJ',
+          avatarColor: '#6366f1',
+          text: `🗳️ **${userName}** ${actionText} (**${currentVotes}/${neededVotes}** votos necessários para 50%+1).`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        };
+        db.messages.push(sysMsg);
+        saveDB(db);
+
+        for (const [sId, sSession] of onlineSessions.entries()) {
+          if (server.members.includes(sSession.userId)) {
+            io.to(sId).emit('chat:message', sysMsg);
+          }
+        }
+      }
+    }
+
+    io.emit('media:state-updated', state);
+    callback?.({ success: true, state, voted: !alreadyVoted });
   });
 
   socket.on('media:play', async ({ channelId, url, inputUrl, title }: { channelId: string; url?: string; inputUrl?: string; title?: string }, callback) => {
@@ -1030,6 +1176,8 @@ io.on('connection', (socket: Socket) => {
         isPlaying: false,
         currentTime: 0,
         updatedAt: Date.now(),
+        skipVotes: [],
+        listeners: [],
       };
       mediaRooms.set(channelId, state);
     }
@@ -1122,6 +1270,7 @@ io.on('connection', (socket: Socket) => {
       state.currentTime = time;
       state.updatedAt = Date.now();
     } else if (action === 'skip') {
+      state.skipVotes = [];
       if (state.queue.length > 0) {
         state.currentTrack = state.queue.shift() || null;
         state.isPlaying = true;
@@ -1141,8 +1290,29 @@ io.on('connection', (socket: Socket) => {
   socket.on('disconnect', () => {
     console.log(`[Socket] Desconectado: ${socket.id}`);
     const session = onlineSessions.get(socket.id);
-    if (session && session.currentVoiceChannel) {
-      socket.to(session.currentVoiceChannel).emit('voice:peer-left', { peerId: socket.id });
+    if (session) {
+      if (session.currentVoiceChannel) {
+        socket.to(session.currentVoiceChannel).emit('voice:peer-left', { peerId: socket.id });
+      }
+
+      // Remover usuário de ouvintes de salas de mídia
+      for (const [, mState] of mediaRooms.entries()) {
+        if (mState.listeners.includes(session.userId)) {
+          mState.listeners = mState.listeners.filter((id) => id !== session.userId);
+          mState.skipVotes = mState.skipVotes.filter((id) => id !== session.userId);
+          if (mState.currentTrack && mState.listeners.length > 0) {
+            const needed = Math.floor(mState.listeners.length / 2) + 1;
+            if (mState.skipVotes.length >= needed) {
+              mState.currentTrack = mState.queue.shift() || null;
+              mState.isPlaying = !!mState.currentTrack;
+              mState.currentTime = 0;
+              mState.updatedAt = Date.now();
+              mState.skipVotes = [];
+            }
+          }
+          io.emit('media:state-updated', mState);
+        }
+      }
     }
     onlineSessions.delete(socket.id);
     broadcastOnlineList();
