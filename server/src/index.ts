@@ -1557,13 +1557,20 @@ io.on('connection', (socket: Socket) => {
 
     if (action === 'play') {
       state.isPlaying = true;
-      if (time !== undefined) state.currentTime = time;
+      if (typeof time === 'number' && !isNaN(time) && (time > 0.5 || state.currentTime < 2)) {
+        state.currentTime = Math.max(0, time);
+      }
       state.updatedAt = Date.now();
     } else if (action === 'pause') {
+      if (state.isPlaying) {
+        const elapsed = Math.max(0, (Date.now() - state.updatedAt) / 1000);
+        state.currentTime = typeof time === 'number' && time > 0.5 ? time : state.currentTime + elapsed;
+      } else if (typeof time === 'number' && time > 0.5) {
+        state.currentTime = time;
+      }
       state.isPlaying = false;
-      if (time !== undefined) state.currentTime = time;
       state.updatedAt = Date.now();
-    } else if (action === 'seek' && time !== undefined) {
+    } else if (action === 'seek' && typeof time === 'number' && !isNaN(time)) {
       state.currentTime = Math.max(0, time);
       state.updatedAt = Date.now();
     } else if (action === 'skip') {
@@ -1599,15 +1606,15 @@ io.on('connection', (socket: Socket) => {
     // Apenas o responsável por colocar o vídeo atual é a referência de tempo
     if (state.currentTrack.addedBy.id !== session.userId) return;
 
-    if (typeof currentTime === 'number' && !isNaN(currentTime)) {
-      state.currentTime = Math.max(0, currentTime);
-    }
-    if (typeof isPlaying === 'boolean') {
-      state.isPlaying = isPlaying;
-    }
+    // Ignora heartbeats com tempo zerado por buffering ou quando pausado
+    if (!state.isPlaying || !isPlaying) return;
+    if (typeof currentTime !== 'number' || isNaN(currentTime) || currentTime <= 0.5) return;
+
+    state.currentTime = Math.max(0, currentTime);
     state.updatedAt = Date.now();
 
-    io.emit('media:state-updated', state);
+    // Envia para todos os espectadores exceto o próprio dono que enviou o heartbeat
+    socket.broadcast.emit('media:state-updated', state);
   });
 
   socket.on('disconnect', () => {

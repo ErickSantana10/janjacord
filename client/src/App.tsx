@@ -959,8 +959,8 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* Server Members Sidebar: Shown whenever a server is open */}
-        {currentServer && (
+        {/* Server Members Sidebar: Shown in text channels (hidden in media/stage rooms to maximize player size) */}
+        {currentServer && activeChannel?.type !== 'media' && !(currentVoiceChannelId && voiceViewMode === 'stage') && (
           <ServerMemberList
             server={currentServer}
             currentUser={currentUser}
