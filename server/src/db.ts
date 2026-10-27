@@ -16,7 +16,7 @@ export interface DBChannel {
   id: string;
   serverId: string;
   name: string;
-  type: 'text' | 'voice';
+  type: 'text' | 'voice' | 'media';
 }
 
 export interface DBServer {

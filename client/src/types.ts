@@ -33,7 +33,30 @@ export interface Channel {
   id: string;
   serverId: string;
   name: string;
-  type: 'text' | 'voice';
+  type: 'text' | 'voice' | 'media';
+}
+
+export interface PlaylistItem {
+  id: string;
+  url: string;
+  videoId: string;
+  title: string;
+  thumbnailUrl?: string;
+  addedBy: {
+    id: string;
+    name: string;
+    avatarColor: string;
+    avatarUrl?: string;
+  };
+}
+
+export interface MediaRoomState {
+  channelId: string;
+  currentTrack: PlaylistItem | null;
+  queue: PlaylistItem[];
+  isPlaying: boolean;
+  currentTime: number;
+  updatedAt: number;
 }
 
 export interface ServerItem {

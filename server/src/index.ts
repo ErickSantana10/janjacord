@@ -28,6 +28,37 @@ interface OnlineSession {
   streamQuality: 'potato' | 'balanced' | 'gamer';
 }
 
+export interface PlaylistItem {
+  id: string;
+  url: string;
+  videoId: string;
+  title: string;
+  thumbnailUrl?: string;
+  addedBy: {
+    id: string;
+    name: string;
+    avatarColor: string;
+    avatarUrl?: string;
+  };
+}
+
+export interface MediaRoomState {
+  channelId: string;
+  currentTrack: PlaylistItem | null;
+  queue: PlaylistItem[];
+  isPlaying: boolean;
+  currentTime: number;
+  updatedAt: number;
+}
+
+const mediaRooms = new Map<string, MediaRoomState>();
+
+function extractYouTubeId(url: string): string | null {
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+  const match = url.match(regExp);
+  return (match && match[2].length === 11) ? match[2] : null;
+}
+
 const onlineSessions = new Map<string, OnlineSession>();
 
 function generateInviteCode(): string {
@@ -387,8 +418,8 @@ io.on('connection', (socket: Socket) => {
     callback?.({ success: true, user: state?.currentUser });
   });
 
-  // 5. CRIAR NOVO CANAL NO SERVIDOR (Texto ou Voz)
-  socket.on('channel:create', ({ serverId, name, type }: { serverId: string; name: string; type: 'text' | 'voice' }, callback) => {
+  // 5. CRIAR NOVO CANAL NO SERVIDOR (Texto, Voz ou Sala de Música/Vídeo)
+  socket.on('channel:create', ({ serverId, name, type }: { serverId: string; name: string; type: 'text' | 'voice' | 'media' }, callback) => {
     const session = onlineSessions.get(socket.id);
     if (!session) return callback?.({ success: false, error: 'Não autenticado.' });
 
@@ -401,15 +432,30 @@ io.on('connection', (socket: Socket) => {
       return callback?.({ success: false, error: 'Servidor não encontrado ou você não é membro.' });
     }
 
+    const typePrefix = type === 'voice' ? 'vox' : type === 'media' ? 'med' : 'txt';
+    const channelDisplayName = type === 'voice' ? `🔊 ${cleanName}` : type === 'media' ? `🎬 ${cleanName}` : cleanName;
+
     const newChannel: DBChannel = {
-      id: `c-${type === 'voice' ? 'vox' : 'txt'}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+      id: `c-${typePrefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
       serverId,
-      name: type === 'voice' ? `🔊 ${cleanName}` : cleanName,
+      name: channelDisplayName,
       type,
     };
 
     server.channels.push(newChannel);
     saveDB(db);
+
+    // Se for canal de mídia, inicializa estado da fila
+    if (type === 'media') {
+      mediaRooms.set(newChannel.id, {
+        channelId: newChannel.id,
+        currentTrack: null,
+        queue: [],
+        isPlaying: false,
+        currentTime: 0,
+        updatedAt: Date.now(),
+      });
+    }
 
     // Transmitir para todos os membros online do servidor
     for (const [sId, sSession] of onlineSessions.entries()) {
@@ -920,6 +966,139 @@ io.on('connection', (socket: Socket) => {
 
   socket.on('webrtc:ice-candidate', ({ toPeerId, candidate }: { toPeerId: string; candidate: RTCIceCandidateInit }) => {
     io.to(toPeerId).emit('webrtc:ice-candidate', { fromPeerId: socket.id, candidate });
+  });
+
+  // 14. SALA DE MÚSICA & VÍDEO COMPARTILHADO (YouTube Sincronizado)
+  socket.on('media:get-state', ({ channelId }: { channelId: string }, callback) => {
+    let state = mediaRooms.get(channelId);
+    if (!state) {
+      state = {
+        channelId,
+        currentTrack: null,
+        queue: [],
+        isPlaying: false,
+        currentTime: 0,
+        updatedAt: Date.now(),
+      };
+      mediaRooms.set(channelId, state);
+    }
+    callback?.({ success: true, state });
+  });
+
+  socket.on('media:play', ({ channelId, inputUrl }: { channelId: string; inputUrl: string }, callback) => {
+    const session = onlineSessions.get(socket.id);
+    if (!session) return callback?.({ success: false, error: 'Não autenticado.' });
+
+    const db = loadDB();
+    const user = db.users.find((u) => u.id === session.userId);
+    if (!user) return;
+
+    const videoId = extractYouTubeId(inputUrl);
+    if (!videoId) {
+      return callback?.({ success: false, error: 'Link do YouTube inválido. Exemplo: https://www.youtube.com/watch?v=dQw4w9WgXcQ' });
+    }
+
+    let state = mediaRooms.get(channelId);
+    if (!state) {
+      state = {
+        channelId,
+        currentTrack: null,
+        queue: [],
+        isPlaying: false,
+        currentTime: 0,
+        updatedAt: Date.now(),
+      };
+      mediaRooms.set(channelId, state);
+    }
+
+    const userName = user.name || (user as any).displayName || 'Membro';
+    const trackItem: PlaylistItem = {
+      id: Math.random().toString(36).substring(2, 9),
+      url: inputUrl,
+      videoId,
+      title: `Vídeo do YouTube (${videoId})`,
+      thumbnailUrl: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+      addedBy: {
+        id: user.id,
+        name: userName,
+        avatarColor: user.avatarColor || '#6366f1',
+        avatarUrl: user.avatarUrl,
+      },
+    };
+
+    // Se não tiver nada tocando, toca imediatamente
+    if (!state.currentTrack) {
+      state.currentTrack = trackItem;
+      state.isPlaying = true;
+      state.currentTime = 0;
+      state.updatedAt = Date.now();
+    } else {
+      // Caso contrário, adiciona à fila de reprodução
+      state.queue.push(trackItem);
+    }
+
+    // Transmite o novo estado para todos os usuários conectados no canal
+    io.emit('media:state-updated', state);
+
+    // Também envia uma mensagem no chat do canal avisando da adição
+    const targetChannel = db.servers.flatMap((s) => s.channels).find((c) => c.id === channelId);
+    if (targetChannel) {
+      const server = db.servers.find((s) => s.id === targetChannel.serverId);
+      if (server) {
+        const sysMsg: DBMessage = {
+          id: Math.random().toString(36).substring(2, 9),
+          serverId: server.id,
+          channelId,
+          userId: 'system',
+          userName: '🎵 Janjacord DJ',
+          avatarColor: '#10b981',
+          text: `▶️ **${userName}** adicionou: [Assistir no YouTube](https://youtu.be/${videoId})`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        };
+        db.messages.push(sysMsg);
+        saveDB(db);
+
+        for (const [sId, sSession] of onlineSessions.entries()) {
+          if (server.members.includes(sSession.userId)) {
+            io.to(sId).emit('chat:message', sysMsg);
+          }
+        }
+      }
+    }
+
+    callback?.({ success: true, state });
+  });
+
+  socket.on('media:sync-action', ({ channelId, action, time }: { channelId: string; action: 'play' | 'pause' | 'skip' | 'seek'; time?: number }) => {
+    let state = mediaRooms.get(channelId);
+    if (!state) return;
+
+    if (action === 'play') {
+      state.isPlaying = true;
+      if (time !== undefined) state.currentTime = time;
+      state.updatedAt = Date.now();
+    } else if (action === 'pause') {
+      state.isPlaying = false;
+      if (time !== undefined) state.currentTime = time;
+      state.updatedAt = Date.now();
+    } else if (action === 'seek' && time !== undefined) {
+      state.currentTime = time;
+      state.updatedAt = Date.now();
+    } else if (action === 'skip') {
+      if (state.queue.length > 0) {
+        state.currentTrack = state.queue.shift() || null;
+        state.isPlaying = true;
+        state.currentTime = 0;
+        state.updatedAt = Date.now();
+      } else {
+        state.currentTrack = null;
+        state.isPlaying = false;
+        state.currentTime = 0;
+        state.updatedAt = Date.now();
+      }
+    }
+
+    io.emit('media:state-updated', state);
   });
 
   socket.on('disconnect', () => {

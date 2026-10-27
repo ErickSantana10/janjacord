@@ -4,6 +4,7 @@ import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { DMChatArea } from './components/DMChatArea';
 import { VoiceRoom } from './components/VoiceRoom';
+import { MediaRoom } from './components/MediaRoom';
 import { HomeView } from './components/HomeView';
 import { LoginModal } from './components/LoginModal';
 import { CreateServerModal } from './components/CreateServerModal';
@@ -14,7 +15,7 @@ import { ServerMemberList } from './components/ServerMemberList';
 import { WebRTCManager } from './services/webrtc';
 import { sounds } from './services/soundEffects';
 import { Phone, PhoneOff } from 'lucide-react';
-import type { Channel, Message, DMMessage, User, ServerItem, FriendItem, OnlineUser, StreamQualityPreset, MessageAttachment, ServerMemberInfo } from './types';
+import type { Channel, Message, DMMessage, User, ServerItem, FriendItem, OnlineUser, StreamQualityPreset, MessageAttachment, ServerMemberInfo, MediaRoomState } from './types';
 
 interface RemoteStreamItem {
   peerId: string;
@@ -59,11 +60,19 @@ export const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCreateServerOpen, setIsCreateServerOpen] = useState(false);
   const [isCreateChannelOpen, setIsCreateChannelOpen] = useState(false);
-  const [createChannelType, setCreateChannelType] = useState<'text' | 'voice'>('text');
+  const [createChannelType, setCreateChannelType] = useState<'text' | 'voice' | 'media'>('text');
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+
+  // Media Room State (Watch together / Music DJ)
+  const [mediaRoomState, setMediaRoomState] = useState<MediaRoomState | null>(null);
 
   const socketRef = useRef<Socket | null>(null);
   const rtcManagerRef = useRef<WebRTCManager | null>(null);
+  const activeChannelRef = useRef<Channel | null>(null);
+
+  useEffect(() => {
+    activeChannelRef.current = activeChannel;
+  }, [activeChannel]);
 
   useEffect(() => {
     const socket = io();
@@ -152,6 +161,12 @@ export const App: React.FC = () => {
     socket.on('chat:message', (newMessage: Message) => {
       setMessages((prev) => [...prev, newMessage]);
       sounds.playMessagePop();
+    });
+
+    socket.on('media:state-updated', (updatedState: MediaRoomState) => {
+      if (activeChannelRef.current?.id === updatedState.channelId) {
+        setMediaRoomState(updatedState);
+      }
     });
 
     socket.on('dm:message', (newDM: DMMessage) => {
@@ -326,7 +341,14 @@ export const App: React.FC = () => {
 
   const handleSelectChannel = (channel: Channel) => {
     setActiveChannel(channel);
-    setVoiceViewMode('chat'); // browse text channel while staying in voice
+    setVoiceViewMode('chat'); // browse text or media channel while staying in voice
+    if (channel.type === 'media') {
+      socketRef.current?.emit('media:get-state', { channelId: channel.id }, (res: any) => {
+        if (res?.success && res.state) {
+          setMediaRoomState(res.state);
+        }
+      });
+    }
   };
 
   const handleViewVoiceRoom = () => {
@@ -343,14 +365,36 @@ export const App: React.FC = () => {
     });
   };
 
-  const handleCreateChannel = (name: string, type: 'text' | 'voice') => {
+  const handleCreateChannel = (name: string, type: 'text' | 'voice' | 'media') => {
     if (!currentServer) return;
     socketRef.current?.emit('channel:create', { serverId: currentServer.id, name, type }, (res: { success: boolean; channel?: Channel }) => {
-      if (res.success && res.channel && type === 'text') {
+      if (res.success && res.channel && (type === 'text' || type === 'media')) {
         setActiveChannel(res.channel);
         setVoiceViewMode('chat');
+        if (type === 'media') {
+          socketRef.current?.emit('media:get-state', { channelId: res.channel.id }, (r: any) => {
+            if (r?.success && r.state) {
+              setMediaRoomState(r.state);
+            }
+          });
+        }
       }
     });
+  };
+
+  // Media Room Handlers (Watch Together & Music DJ)
+  const handlePlayMedia = (url: string, title?: string) => {
+    if (!activeChannel) return;
+    socketRef.current?.emit('media:play', { channelId: activeChannel.id, url, title }, (res: any) => {
+      if (res?.error) {
+        alert(res.error);
+      }
+    });
+  };
+
+  const handleMediaSyncAction = (action: 'play' | 'pause' | 'skip' | 'seek', time?: number) => {
+    if (!activeChannel) return;
+    socketRef.current?.emit('media:sync-action', { channelId: activeChannel.id, action, time });
   };
 
   const handleJoinByInvite = (inviteCode: string, callback?: (error?: string) => void) => {
@@ -729,6 +773,17 @@ export const App: React.FC = () => {
             onToggleScreenShare={handleToggleScreenShare}
             onLeaveVoice={handleLeaveVoice}
             onChangeQuality={handleChangeQuality}
+          />
+        ) : currentServer && activeChannel?.type === 'media' ? (
+          /* Synchronized Media Room (Watch Together & Music DJ) */
+          <MediaRoom
+            channel={activeChannel}
+            currentUser={currentUser}
+            mediaState={mediaRoomState}
+            messages={messages.filter((m) => m.serverId === currentServer.id)}
+            onSendMessage={handleSendMessage}
+            onPlayMedia={handlePlayMedia}
+            onSyncAction={handleMediaSyncAction}
           />
         ) : currentServer && activeChannel ? (
           /* If user is inside a server's text channel (can be talking in voice at the same time!) */

@@ -12,7 +12,8 @@ import {
   Users,
   LogOut,
   UserPlus,
-  Monitor
+  Monitor,
+  Film
 } from 'lucide-react';
 import type { Channel, User, ServerItem, FriendItem, OnlineUser } from '../types';
 
@@ -32,7 +33,7 @@ interface SidebarProps {
   onSelectDM: (friend: FriendItem['friend']) => void;
   onSelectServer: (server: ServerItem) => void;
   onOpenCreateServer: () => void;
-  onOpenCreateChannel: (initialType: 'text' | 'voice') => void;
+  onOpenCreateChannel: (initialType: 'text' | 'voice' | 'media') => void;
   onOpenInviteModal: () => void;
   onSelectChannel: (channel: Channel) => void;
   onJoinVoice: (channelId: string, serverId: string) => void;
@@ -74,6 +75,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const isAtHome = currentServer === null;
   const textChannels = currentServer ? currentServer.channels.filter((c) => c.type === 'text') : [];
   const voiceChannels = currentServer ? currentServer.channels.filter((c) => c.type === 'voice') : [];
+  const mediaChannels = currentServer ? currentServer.channels.filter((c) => c.type === 'media') : [];
   const acceptedFriends = friends.filter((f) => f.status === 'accepted');
 
   const getServerInitials = (name: string) => {
@@ -399,6 +401,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             </div>
                           )}
                         </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Media Rooms (Salas de Música & Vídeo) */}
+                <div>
+                  <div className="px-2 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between group">
+                    <span>Salas de Vídeo & Som</span>
+                    <button
+                      onClick={() => onOpenCreateChannel('media')}
+                      className="p-0.5 text-slate-400 hover:text-white rounded hover:bg-[#27293d] transition cursor-pointer"
+                      title="Criar Sala de Vídeo/Música (+)"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div className="space-y-0.5 mt-1">
+                    {mediaChannels.map((channel) => {
+                      const isActive = activeChannel?.id === channel.id;
+                      return (
+                        <button
+                          key={channel.id}
+                          onClick={() => onSelectChannel(channel)}
+                          className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-sm font-medium transition cursor-pointer ${
+                            isActive
+                              ? 'bg-[#27293a] text-amber-400 shadow-sm font-semibold'
+                              : 'text-slate-400 hover:bg-[#1d1f2b] hover:text-slate-200'
+                          }`}
+                        >
+                          <Film className="w-4 h-4 text-amber-400 shrink-0" />
+                          <span className="truncate">{channel.name.replace(/^🎬\s*/, '')}</span>
+                        </button>
                       );
                     })}
                   </div>

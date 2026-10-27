@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { X, Hash, Volume2, Plus } from 'lucide-react';
+import { X, Hash, Volume2, Plus, Film } from 'lucide-react';
 
 interface CreateChannelModalProps {
   isOpen: boolean;
   serverName: string;
-  initialType?: 'text' | 'voice';
+  initialType?: 'text' | 'voice' | 'media';
   onClose: () => void;
-  onCreateChannel: (name: string, type: 'text' | 'voice') => void;
+  onCreateChannel: (name: string, type: 'text' | 'voice' | 'media') => void;
 }
 
 export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
@@ -16,7 +16,7 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
   onClose,
   onCreateChannel,
 }) => {
-  const [channelType, setChannelType] = useState<'text' | 'voice'>(initialType);
+  const [channelType, setChannelType] = useState<'text' | 'voice' | 'media'>(initialType);
   const [channelName, setChannelName] = useState('');
 
   if (!isOpen) return null;
@@ -100,6 +100,30 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
                   className="accent-emerald-600"
                 />
               </label>
+
+              <label
+                onClick={() => setChannelType('media')}
+                className={`flex items-center gap-3 p-3 rounded-2xl border cursor-pointer transition ${
+                  channelType === 'media'
+                    ? 'bg-[#1e1f30] border-amber-500 shadow-sm'
+                    : 'bg-[#1b1c2a] border-[#27293d] hover:bg-[#1f2033]'
+                }`}
+              >
+                <div className="w-8 h-8 rounded-xl bg-slate-800 flex items-center justify-center text-amber-400">
+                  <Film className="w-5 h-5" />
+                </div>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold text-slate-100">Sala de Música & Vídeo</div>
+                  <div className="text-xs text-slate-400">Assistir YouTube e ouvir sons sincronizados com a galera</div>
+                </div>
+                <input
+                  type="radio"
+                  name="channelType"
+                  checked={channelType === 'media'}
+                  onChange={() => setChannelType('media')}
+                  className="accent-amber-500"
+                />
+              </label>
             </div>
           </div>
 
@@ -110,14 +134,14 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
             </label>
             <div className="relative">
               <span className="absolute left-3.5 top-2.5 text-slate-500 font-bold text-sm">
-                {channelType === 'text' ? '#' : '🔊'}
+                {channelType === 'text' ? '#' : channelType === 'voice' ? '🔊' : '🎬'}
               </span>
               <input
                 type="text"
                 autoFocus
                 value={channelName}
                 onChange={(e) => setChannelName(e.target.value.toLowerCase().replace(/\s+/g, '-'))}
-                placeholder="ex: clipes-e-jogos"
+                placeholder="ex: cinema-da-galera"
                 maxLength={25}
                 className="w-full bg-[#1b1c2a] border border-[#27293d] rounded-xl pl-9 pr-3.5 py-2.5 text-sm text-white placeholder-slate-500 outline-none focus:border-indigo-500 transition select-text"
               />
