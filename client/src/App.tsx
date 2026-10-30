@@ -28,18 +28,20 @@ import {
   Check,
   Monitor,
 } from 'lucide-react';
-import type {
-  Channel,
-  Message,
-  DMMessage,
-  User,
-  ServerItem,
-  FriendItem,
-  OnlineUser,
-  StreamQualityPreset,
-  MessageAttachment,
-  ServerMemberInfo,
-  MediaRoomState,
+import {
+  DEFAULT_AUDIO_SETTINGS,
+  type Channel,
+  type Message,
+  type DMMessage,
+  type User,
+  type ServerItem,
+  type FriendItem,
+  type OnlineUser,
+  type StreamQualityPreset,
+  type MessageAttachment,
+  type ServerMemberInfo,
+  type MediaRoomState,
+  type AudioSettings,
 } from './types';
 
 interface RemoteStreamItem {
@@ -78,10 +80,18 @@ export const App: React.FC = () => {
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [remoteSpeakingPeers, setRemoteSpeakingPeers] = useState<string[]>([]);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [streamQuality, setStreamQuality] = useState<StreamQualityPreset>('balanced');
   const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<RemoteStreamItem[]>([]);
+  const [audioSettings, setAudioSettings] = useState<AudioSettings>(() => {
+    try {
+      const saved = localStorage.getItem('janjacord_audio_settings');
+      if (saved) return { ...DEFAULT_AUDIO_SETTINGS, ...JSON.parse(saved) };
+    } catch {}
+    return DEFAULT_AUDIO_SETTINGS;
+  });
 
   // Modals
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
@@ -142,11 +152,15 @@ export const App: React.FC = () => {
     const socket = io(serverUrl);
     socketRef.current = socket;
 
-    const rtc = new WebRTCManager(socket);
+    const rtc = new WebRTCManager(socket, audioSettings);
     rtcManagerRef.current = rtc;
 
     rtc.onSpeakingChange = (speaking) => {
       setIsSpeaking(speaking);
+    };
+
+    rtc.onRemoteSpeakingChange = (speakingPeerIds) => {
+      setRemoteSpeakingPeers(speakingPeerIds);
     };
 
     rtc.onRemoteStream = (peerId, stream, isScreen) => {
@@ -212,15 +226,31 @@ export const App: React.FC = () => {
 
     socket.on('online:list', (list: OnlineUser[]) => {
       setOnlineUsers(deduplicateOnlineUsers(list));
-      // Remove imediatamente transmissões de tela de quem parou de compartilhar
+      // Remove apenas se o colega desconectou totalmente da sala de voz
       setRemoteStreams((prev) =>
         prev.filter((item) => {
-          if (!item.isScreen) return true;
           const peer = list.find((u) => u.socketId === item.peerId);
-          return peer ? peer.isScreenSharing : false;
+          if (!peer || !peer.currentVoiceChannel) return false;
+          if (item.isScreen && !peer.isScreenSharing) {
+            const hasLiveVideo = item.stream
+              .getVideoTracks()
+              .some((t) => t.readyState === 'live' && !t.muted);
+            return hasLiveVideo;
+          }
+          return true;
         })
       );
     });
+
+    socket.on(
+      'voice:peer-state-change',
+      ({ peerId, socketId, updates }: { peerId?: string; socketId?: string; updates: any }) => {
+        const targetId = socketId || peerId;
+        if (targetId && updates && updates.isScreenSharing === false) {
+          setRemoteStreams((prev) => prev.filter((item) => !(item.peerId === targetId && item.isScreen)));
+        }
+      }
+    );
 
     socket.on('server:created', (newServer: ServerItem) => {
       setServers((prev) => [...prev.filter((s) => s.id !== newServer.id), newServer]);
@@ -324,6 +354,11 @@ export const App: React.FC = () => {
       setVoiceViewMode('stage');
       sounds.playJoinVoice();
 
+      if (peers.length > 0) {
+        sounds.stopOutgoingRing();
+        setCallingFriend(null);
+      }
+
       try {
         await rtc.startMicrophone();
       } catch (err) {
@@ -331,18 +366,21 @@ export const App: React.FC = () => {
       }
 
       peers.forEach((peer) => {
-        rtc.connectToPeer(peer.socketId);
+        if (peer?.socketId) {
+          rtc.connectToPeer(peer.socketId);
+        }
       });
-
-      if (peers.length > 0) {
-        sounds.stopOutgoingRing();
-        setCallingFriend(null);
-      }
     });
 
-    socket.on('voice:peer-joined', () => {
+    socket.on('voice:peer-joined', ({ peer }: { peer?: { socketId?: string } } = {}) => {
       sounds.stopOutgoingRing();
+      sounds.playJoinVoice();
       setCallingFriend(null);
+      if (peer?.socketId) {
+        setTimeout(() => {
+          rtc.connectToPeer(peer.socketId!);
+        }, 350);
+      }
     });
 
     return () => {
@@ -424,6 +462,14 @@ export const App: React.FC = () => {
         showToast(res.error, 'error');
       }
     });
+  };
+
+  const handleUpdateAudioSettings = (newSettings: AudioSettings) => {
+    setAudioSettings(newSettings);
+    try {
+      localStorage.setItem('janjacord_audio_settings', JSON.stringify(newSettings));
+    } catch {}
+    rtcManagerRef.current?.updateAudioSettings(newSettings);
   };
 
   const currentServer = servers.find((s) => s.id === currentServerId) || null;
@@ -1105,6 +1151,7 @@ export const App: React.FC = () => {
           isMuted={isMuted}
           isDeafened={isDeafened}
           isSpeaking={isSpeaking}
+          remoteSpeakingPeers={remoteSpeakingPeers}
           onSelectHome={handleSelectHome}
           onSelectDM={handleSelectDM}
           onSelectServer={handleSelectServer}
@@ -1136,10 +1183,12 @@ export const App: React.FC = () => {
               isMuted={isMuted}
               isDeafened={isDeafened}
               isSpeaking={isSpeaking}
+              remoteSpeakingPeers={remoteSpeakingPeers}
               isScreenSharing={isScreenSharing}
               streamQuality={streamQuality}
               localScreenStream={localScreenStream}
               remoteStreams={remoteStreams}
+              audioSettings={audioSettings}
               isDMCall={!!dmVoiceTarget}
               targetDMFriend={dmVoiceTarget}
               dmMessages={dmMessages}
@@ -1156,6 +1205,7 @@ export const App: React.FC = () => {
               onToggleScreenShare={handleToggleScreenShare}
               onLeaveVoice={handleLeaveVoice}
               onChangeQuality={handleChangeQuality}
+              onOpenSettings={() => setIsSettingsOpen(true)}
             />
           ) : currentServer && activeChannel?.type === 'media' ? (
             <MediaRoom
@@ -1321,8 +1371,13 @@ export const App: React.FC = () => {
       <UserSettingsModal
         currentUser={currentUser}
         isOpen={isSettingsOpen}
+        audioSettings={audioSettings}
+        streamQuality={streamQuality}
         onClose={() => setIsSettingsOpen(false)}
         onSave={handleSaveProfile}
+        onUpdateAudioSettings={handleUpdateAudioSettings}
+        onChangeStreamQuality={handleChangeQuality}
+        onLogout={handleLogout}
       />
 
       {currentServer && (

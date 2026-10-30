@@ -202,3 +202,34 @@ export const QUALITY_PRESETS: Record<StreamQualityPreset, QualityConfig> = {
     bitrateKbps: 5000,
   },
 };
+
+export type InputAudioProfile = 'isolation' | 'studio' | 'custom';
+
+export interface AudioSettings {
+  inputDeviceId: string;
+  outputDeviceId: string;
+  inputVolume: number; // 0 - 200
+  outputVolume: number; // 0 - 100
+  inputProfile: InputAudioProfile;
+  echoCancellation: boolean;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+  autoSensitivity: boolean;
+  sensitivityThreshold: number; // 1 - 80
+  soundEffectsEnabled: boolean;
+}
+
+export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
+  inputDeviceId: 'default',
+  outputDeviceId: 'default',
+  inputVolume: 100,
+  outputVolume: 100,
+  inputProfile: 'isolation',
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  autoSensitivity: true,
+  sensitivityThreshold: 14,
+  soundEffectsEnabled: true,
+};
+

@@ -1271,7 +1271,7 @@ io.on('connection', (socket: Socket) => {
     session.currentVoiceChannel = null;
     session.isScreenSharing = false;
 
-    socket.to(channelId).emit('voice:peer-left', { peerId: socket.id });
+    socket.to(channelId).emit('voice:peer-left', { peerId: socket.id, socketId: socket.id });
     broadcastOnlineList();
   });
 
@@ -1285,21 +1285,31 @@ io.on('connection', (socket: Socket) => {
     if (session.currentVoiceChannel) {
       socket.to(session.currentVoiceChannel).emit('voice:peer-state-change', {
         peerId: socket.id,
+        socketId: socket.id,
         updates,
       });
     }
   });
 
-  socket.on('webrtc:offer', ({ toPeerId, offer }: { toPeerId: string; offer: RTCSessionDescriptionInit }) => {
-    io.to(toPeerId).emit('webrtc:offer', { fromPeerId: socket.id, offer });
+  socket.on('webrtc:offer', (payload: { toPeerId?: string; targetSocketId?: string; offer: RTCSessionDescriptionInit }) => {
+    const target = payload.targetSocketId || payload.toPeerId;
+    if (target) {
+      io.to(target).emit('webrtc:offer', { fromPeerId: socket.id, fromSocketId: socket.id, offer: payload.offer });
+    }
   });
 
-  socket.on('webrtc:answer', ({ toPeerId, answer }: { toPeerId: string; answer: RTCSessionDescriptionInit }) => {
-    io.to(toPeerId).emit('webrtc:answer', { fromPeerId: socket.id, answer });
+  socket.on('webrtc:answer', (payload: { toPeerId?: string; targetSocketId?: string; answer: RTCSessionDescriptionInit }) => {
+    const target = payload.targetSocketId || payload.toPeerId;
+    if (target) {
+      io.to(target).emit('webrtc:answer', { fromPeerId: socket.id, fromSocketId: socket.id, answer: payload.answer });
+    }
   });
 
-  socket.on('webrtc:ice-candidate', ({ toPeerId, candidate }: { toPeerId: string; candidate: RTCIceCandidateInit }) => {
-    io.to(toPeerId).emit('webrtc:ice-candidate', { fromPeerId: socket.id, candidate });
+  socket.on('webrtc:ice-candidate', (payload: { toPeerId?: string; targetSocketId?: string; candidate: RTCIceCandidateInit }) => {
+    const target = payload.targetSocketId || payload.toPeerId;
+    if (target) {
+      io.to(target).emit('webrtc:ice-candidate', { fromPeerId: socket.id, fromSocketId: socket.id, candidate: payload.candidate });
+    }
   });
 
   // 14. SALA DE MÚSICA & VÍDEO COMPARTILHADO (YouTube Sincronizado & Votação)
@@ -1665,7 +1675,7 @@ io.on('connection', (socket: Socket) => {
     const session = onlineSessions.get(socket.id);
     if (session) {
       if (session.currentVoiceChannel) {
-        socket.to(session.currentVoiceChannel).emit('voice:peer-left', { peerId: socket.id });
+        socket.to(session.currentVoiceChannel).emit('voice:peer-left', { peerId: socket.id, socketId: socket.id });
       }
 
       // Remover usuário de ouvintes de salas de mídia

@@ -31,6 +31,7 @@ interface SidebarProps {
   isMuted: boolean;
   isDeafened: boolean;
   isSpeaking: boolean;
+  remoteSpeakingPeers?: string[];
   onSelectHome: () => void;
   onSelectDM: (friend: FriendItem['friend']) => void;
   onSelectServer: (server: ServerItem) => void;
@@ -60,6 +61,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isMuted,
   isDeafened,
   isSpeaking,
+  remoteSpeakingPeers = [],
   onSelectHome,
   onSelectDM,
   onOpenCreateChannel,
@@ -447,7 +449,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           <div className="pl-3.5 pr-2.5 py-1.5 space-y-1 bg-[#0b0714]/70 border border-violet-500/10 rounded-2xl">
                             {membersInThisVoice.map((member) => {
                               const isMe = member.id === currentUser?.id;
-                              const memberSpeaking = isMe ? isSpeaking : false;
+                              const memberSpeaking = isMe
+                                ? isSpeaking && !isMuted
+                                : remoteSpeakingPeers?.includes(member.socketId) && !member.isMuted;
 
                               return (
                                 <div
