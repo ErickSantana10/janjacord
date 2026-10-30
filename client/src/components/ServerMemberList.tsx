@@ -17,7 +17,7 @@ export const ServerMemberList: React.FC<ServerMemberListProps> = ({
   allMembersInfo,
   onSelectMember,
 }) => {
-  const memberIds = server.members || [];
+  const memberIds = Array.from(new Set(server.members || []));
 
   const usersInfoMap = new Map<string, ServerMemberInfo>();
   allMembersInfo.forEach((u) => usersInfoMap.set(u.id, u));
@@ -31,7 +31,20 @@ export const ServerMemberList: React.FC<ServerMemberListProps> = ({
     });
   }
 
-  const serverOnlineMembers = onlineUsers.filter((ou) => memberIds.includes(ou.id));
+  // Deduplicate online members by user ID (preferring session connected to voice or sharing screen)
+  const dedupedOnlineMap = new Map<string, OnlineUser>();
+  for (const ou of onlineUsers) {
+    if (!memberIds.includes(ou.id)) continue;
+    const existing = dedupedOnlineMap.get(ou.id);
+    if (
+      !existing ||
+      (!existing.currentVoiceChannel && ou.currentVoiceChannel) ||
+      (!existing.isScreenSharing && ou.isScreenSharing)
+    ) {
+      dedupedOnlineMap.set(ou.id, ou);
+    }
+  }
+  const serverOnlineMembers = Array.from(dedupedOnlineMap.values());
   const onlineIds = new Set(serverOnlineMembers.map((ou) => ou.id));
   const offlineMemberIds = memberIds.filter((id) => !onlineIds.has(id));
 

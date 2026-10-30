@@ -151,6 +151,49 @@ function getUserFriends(userId: string, db: ReturnType<typeof loadDB>) {
   }).filter((item) => item.friend !== null);
 }
 
+function getDeduplicatedOnlineUsers(db: ReturnType<typeof loadDB>) {
+  const byUserId = new Map<string, OnlineSession>();
+
+  for (const session of onlineSessions.values()) {
+    const existing = byUserId.get(session.userId);
+    if (!existing) {
+      byUserId.set(session.userId, session);
+    } else {
+      // Prioriza a sessão que está conectada em um canal de voz ou compartilhando tela
+      if (session.currentVoiceChannel && !existing.currentVoiceChannel) {
+        byUserId.set(session.userId, session);
+      } else if (session.isScreenSharing && !existing.isScreenSharing) {
+        byUserId.set(session.userId, session);
+      } else if (!existing.currentVoiceChannel) {
+        byUserId.set(session.userId, session);
+      }
+    }
+  }
+
+  return Array.from(byUserId.values()).map((session) => {
+    const u = db.users.find((dbU) => dbU.id === session.userId);
+    const name = u?.name || (u as any)?.displayName || (u as any)?.username || 'Gamer';
+    const tag = u?.tag || '001';
+    return {
+      id: session.userId,
+      socketId: session.socketId,
+      name,
+      tag,
+      username: name,
+      displayName: name,
+      avatarColor: u?.avatarColor || '#8b5cf6',
+      avatarUrl: u?.avatarUrl,
+      bio: u?.bio,
+      currentVoiceChannel: session.currentVoiceChannel,
+      currentServerId: session.currentServerId,
+      isMuted: session.isMuted,
+      isDeafened: session.isDeafened,
+      isScreenSharing: session.isScreenSharing,
+      streamQuality: session.streamQuality,
+    };
+  });
+}
+
 function getUserState(userId: string) {
   const db = loadDB();
   const user = db.users.find((u) => u.id === userId);
@@ -166,35 +209,13 @@ function getUserState(userId: string) {
     (m) => m.fromUserId === userId || m.toUserId === userId
   );
   const friends = getUserFriends(userId, db);
-
-  const activeUsers = Array.from(onlineSessions.values()).map((session) => {
-    const u = db.users.find((dbU) => dbU.id === session.userId);
-    const name = u?.name || (u as any)?.displayName || (u as any)?.username || 'Gamer';
-    const tag = u?.tag || '001';
-    return {
-      id: session.userId,
-      socketId: session.socketId,
-      name,
-      tag,
-      username: name,
-      displayName: name,
-      avatarColor: u?.avatarColor || '#6366f1',
-      avatarUrl: u?.avatarUrl,
-      bio: u?.bio,
-      currentVoiceChannel: session.currentVoiceChannel,
-      currentServerId: session.currentServerId,
-      isMuted: session.isMuted,
-      isDeafened: session.isDeafened,
-      isScreenSharing: session.isScreenSharing,
-      streamQuality: session.streamQuality,
-    };
-  });
+  const activeUsers = getDeduplicatedOnlineUsers(db);
 
   const allUsersMap = db.users.map((u) => ({
     id: u.id,
     name: u.name || (u as any).displayName || (u as any).username || 'Gamer',
     tag: u.tag || '001',
-    avatarColor: u.avatarColor || '#6366f1',
+    avatarColor: u.avatarColor || '#8b5cf6',
     avatarUrl: u.avatarUrl,
     bio: u.bio,
   }));
@@ -221,29 +242,7 @@ function getUserState(userId: string) {
 
 function broadcastOnlineList() {
   const db = loadDB();
-  const activeUsers = Array.from(onlineSessions.values()).map((session) => {
-    const u = db.users.find((dbU) => dbU.id === session.userId);
-    const name = u?.name || (u as any)?.displayName || (u as any)?.username || 'Gamer';
-    const tag = u?.tag || '001';
-    return {
-      id: session.userId,
-      socketId: session.socketId,
-      name,
-      tag,
-      username: name,
-      displayName: name,
-      avatarColor: u?.avatarColor || '#6366f1',
-      avatarUrl: u?.avatarUrl,
-      bio: u?.bio,
-      currentVoiceChannel: session.currentVoiceChannel,
-      currentServerId: session.currentServerId,
-      isMuted: session.isMuted,
-      isDeafened: session.isDeafened,
-      isScreenSharing: session.isScreenSharing,
-      streamQuality: session.streamQuality,
-    };
-  });
-
+  const activeUsers = getDeduplicatedOnlineUsers(db);
   io.emit('online:list', activeUsers);
 }
 
@@ -589,7 +588,7 @@ io.on('connection', (socket: Socket) => {
   });
 
   // 8. CRIAR SERVIDOR
-  socket.on('server:create', ({ name, iconColor }, callback) => {
+  socket.on('server:create', ({ name, iconColor, iconUrl, bannerUrl, description }, callback) => {
     const session = onlineSessions.get(socket.id);
     if (!session) return callback?.({ success: false, error: 'Não autenticado.' });
 
@@ -603,7 +602,10 @@ io.on('connection', (socket: Socket) => {
     const newServer: DBServer = {
       id: serverId,
       name: serverName,
-      iconColor: iconColor || '#10b981',
+      iconColor: iconColor || '#8b5cf6',
+      iconUrl: iconUrl || undefined,
+      bannerUrl: bannerUrl || undefined,
+      description: description ? description.trim() : undefined,
       ownerId: session.userId,
       inviteCode,
       members: [session.userId],
@@ -613,8 +615,8 @@ io.on('connection', (socket: Socket) => {
       ],
       roles: [
         { id: 'role-admin', name: 'Administrador', color: '#ef4444', isAdmin: true },
-        { id: 'role-mod', name: 'Moderador', color: '#3b82f6', isAdmin: false },
-        { id: 'role-member', name: 'Membro', color: '#94a3b8', isAdmin: false },
+        { id: 'role-mod', name: 'Moderador', color: '#8b5cf6', isAdmin: false },
+        { id: 'role-member', name: 'Membro', color: '#a855f7', isAdmin: false },
       ],
       memberRoles: {
         [session.userId]: ['role-admin'],
@@ -625,7 +627,11 @@ io.on('connection', (socket: Socket) => {
     db.servers.push(newServer);
     saveDB(db);
 
-    socket.emit('server:created', newServer);
+    for (const [sId, sSession] of onlineSessions.entries()) {
+      if (sSession.userId === session.userId) {
+        io.to(sId).emit('server:created', newServer);
+      }
+    }
     callback?.({ success: true, server: newServer });
   });
 
@@ -768,8 +774,8 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
-  // 10.2 ATUALIZAR CONFIGURAÇÕES DO SERVIDOR (Nome e Cor do Ícone)
-  socket.on('server:update-settings', ({ serverId, name, iconColor }, callback) => {
+  // 10.2 ATUALIZAR CONFIGURAÇÕES DO SERVIDOR (Nome, Cor, Foto, Banner, Descrição)
+  socket.on('server:update-settings', ({ serverId, name, iconColor, iconUrl, bannerUrl, description }, callback) => {
     const session = onlineSessions.get(socket.id);
     if (!session) return callback?.({ success: false, error: 'Não autenticado.' });
 
@@ -783,6 +789,9 @@ io.on('connection', (socket: Socket) => {
 
     if (name && name.trim()) server.name = name.trim();
     if (iconColor) server.iconColor = iconColor;
+    if (iconUrl !== undefined) server.iconUrl = iconUrl || undefined;
+    if (bannerUrl !== undefined) server.bannerUrl = bannerUrl || undefined;
+    if (description !== undefined) server.description = description ? description.trim() : undefined;
 
     saveDB(db);
     broadcastServerUpdated(server);

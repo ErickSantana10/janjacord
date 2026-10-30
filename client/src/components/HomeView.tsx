@@ -489,39 +489,65 @@ export const HomeView: React.FC<HomeViewProps> = ({
                   <div
                     key={server.id}
                     onClick={() => onSelectServer(server)}
-                    className="bg-[#140d26]/80 hover:bg-[#1b1233] border border-violet-500/15 hover:border-violet-500/45 rounded-3xl p-5 cursor-pointer transition-all duration-200 shadow-lg group space-y-4"
+                    className="bg-[#140d26]/80 hover:bg-[#1b1233] border border-violet-500/15 hover:border-violet-500/45 rounded-3xl overflow-hidden cursor-pointer transition-all duration-200 shadow-lg group flex flex-col justify-between"
                   >
-                    <div className="flex items-center gap-3.5">
-                      <div
-                        className="w-12 h-12 rounded-2xl flex items-center justify-center font-black text-white text-base shadow-md group-hover:scale-105 transition-transform"
-                        style={{ backgroundColor: server.iconColor }}
-                      >
-                        {getServerInitials(server.name)}
+                    {server.bannerUrl && (
+                      <div className="h-20 w-full relative overflow-hidden">
+                        <img
+                          src={server.bannerUrl}
+                          alt={server.name}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-[#140d26] to-transparent" />
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5">
-                          <h4 className="font-bold text-slate-100 truncate group-hover:text-violet-300 transition">
-                            {server.name}
-                          </h4>
-                          {isOwner && (
-                            <span className="text-[10px] bg-fuchsia-500/20 text-fuchsia-300 border border-fuchsia-500/30 px-1.5 rounded-md font-mono font-bold">
-                              DONO
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-violet-300/60 font-mono mt-0.5">
-                          {textCount} texto • {voiceCount} voz • {server.members.length} membros
-                        </div>
-                      </div>
-                    </div>
+                    )}
 
-                    <div className="pt-2 border-t border-violet-500/10 flex items-center justify-between text-xs text-slate-400">
-                      <span className="font-mono text-[11px] bg-[#0b0714] px-2.5 py-0.5 rounded-lg border border-violet-500/15 text-violet-300">
-                        Convite: {server.inviteCode}
-                      </span>
-                      <span className="text-violet-400 font-bold group-hover:translate-x-1 transition-transform">
-                        →
-                      </span>
+                    <div className="p-5 space-y-4">
+                      <div className="flex items-center gap-3.5">
+                        {server.iconUrl ? (
+                          <img
+                            src={server.iconUrl}
+                            alt={server.name}
+                            className="w-12 h-12 rounded-2xl object-cover shadow-md border border-violet-400/30 group-hover:scale-105 transition-transform shrink-0"
+                          />
+                        ) : (
+                          <div
+                            className="w-12 h-12 rounded-2xl flex items-center justify-center font-black text-white text-base shadow-md group-hover:scale-105 transition-transform shrink-0"
+                            style={{ backgroundColor: server.iconColor }}
+                          >
+                            {getServerInitials(server.name)}
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <h4 className="font-bold text-slate-100 truncate group-hover:text-violet-300 transition">
+                              {server.name}
+                            </h4>
+                            {isOwner && (
+                              <span className="text-[10px] bg-fuchsia-500/20 text-fuchsia-300 border border-fuchsia-500/30 px-1.5 rounded-md font-mono font-bold">
+                                DONO
+                              </span>
+                            )}
+                          </div>
+                          {server.description && (
+                            <p className="text-xs text-slate-400 truncate mt-0.5">
+                              {server.description}
+                            </p>
+                          )}
+                          <div className="text-[11px] text-violet-300/60 font-mono mt-0.5">
+                            {textCount} texto • {voiceCount} voz • {server.members.length} membros
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-violet-500/10 flex items-center justify-between text-xs text-slate-400">
+                        <span className="font-mono text-[11px] bg-[#0b0714] px-2.5 py-0.5 rounded-lg border border-violet-500/15 text-violet-300">
+                          Convite: {server.inviteCode}
+                        </span>
+                        <span className="text-violet-400 font-bold group-hover:translate-x-1 transition-transform">
+                          →
+                        </span>
+                      </div>
                     </div>
                   </div>
                 );

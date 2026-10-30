@@ -7,10 +7,17 @@ export class WebRTCManager {
   private makingOffer: Map<string, boolean> = new Map();
   private localStream: MediaStream | null = null;
   private screenStream: MediaStream | null = null;
+  private rawScreenStream: MediaStream | null = null;
 
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private speakingInterval: number | null = null;
+
+  // Anti-Eco para compartilhamento de som do sistema: monitora vozes remotas do próprio Janjacord
+  private remoteVoiceAnalysers: Map<string, { source: MediaStreamAudioSourceNode; analyser: AnalyserNode }> =
+    new Map();
+  private screenAudioGainNode: GainNode | null = null;
+  private antiEchoInterval: number | null = null;
 
   public onSpeakingChange?: (isSpeaking: boolean) => void;
   public onRemoteStream?: (peerId: string, stream: MediaStream, isScreen: boolean) => void;
@@ -29,6 +36,16 @@ export class WebRTCManager {
   constructor(socket: Socket) {
     this.socket = socket;
     this.setupSignaling();
+  }
+
+  private getAudioContext(): AudioContext {
+    if (!this.audioContext || this.audioContext.state === 'closed') {
+      this.audioContext = new AudioContext();
+    }
+    if (this.audioContext.state === 'suspended') {
+      this.audioContext.resume().catch(() => {});
+    }
+    return this.audioContext;
   }
 
   private setupSignaling() {
@@ -79,7 +96,7 @@ export class WebRTCManager {
         if (pc && candidate) {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
         }
-      } catch (err) {
+      } catch {
         // Ignora candidatos ICE obsoletos durante renegociação
       }
     });
@@ -93,6 +110,26 @@ export class WebRTCManager {
   public async connectToPeer(targetSocketId: string) {
     const pc = this.getOrCreatePeerConnection(targetSocketId);
     await this.renegotiate(targetSocketId, pc);
+  }
+
+  private registerRemoteVoiceForAntiEcho(peerId: string, stream: MediaStream) {
+    try {
+      if (stream.getAudioTracks().length === 0) return;
+      const ctx = this.getAudioContext();
+      const existing = this.remoteVoiceAnalysers.get(peerId);
+      if (existing) {
+        try {
+          existing.source.disconnect();
+        } catch {}
+      }
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      this.remoteVoiceAnalysers.set(peerId, { source, analyser });
+    } catch {
+      // Ignora caso o stream ainda não possua áudio ativo
+    }
   }
 
   private getOrCreatePeerConnection(peerId: string): RTCPeerConnection {
@@ -129,12 +166,15 @@ export class WebRTCManager {
       const isScreen = event.track.kind === 'video' || remoteStream.getVideoTracks().length > 0;
       this.onRemoteStream?.(peerId, remoteStream, isScreen);
 
+      if (!isScreen && event.track.kind === 'audio') {
+        this.registerRemoteVoiceForAntiEcho(peerId, remoteStream);
+      }
+
       if (event.track.kind === 'video') {
         event.track.onended = () => {
           this.onRemoteScreenRemoved?.(peerId);
         };
         event.track.onmute = () => {
-          // Alguns navegadores emitem mute ao remover a track na renegociação
           if (remoteStream.getVideoTracks().every((t) => t.readyState === 'ended' || t.muted)) {
             setTimeout(() => {
               if (remoteStream.getVideoTracks().every((t) => t.readyState === 'ended' || t.muted)) {
@@ -198,15 +238,16 @@ export class WebRTCManager {
 
   private setupVoiceActivityDetection(stream: MediaStream) {
     try {
-      this.audioContext = new AudioContext();
-      const source = this.audioContext.createMediaStreamSource(stream);
-      this.analyser = this.audioContext.createAnalyser();
+      const ctx = this.getAudioContext();
+      const source = ctx.createMediaStreamSource(stream);
+      this.analyser = ctx.createAnalyser();
       this.analyser.fftSize = 256;
       source.connect(this.analyser);
 
       const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
       let lastState = false;
 
+      if (this.speakingInterval) clearInterval(this.speakingInterval);
       this.speakingInterval = window.setInterval(() => {
         if (!this.analyser) return;
         this.analyser.getByteFrequencyData(dataArray);
@@ -233,7 +274,84 @@ export class WebRTCManager {
   }
 
   /**
-   * Inicia o compartilhamento de tela (compatível tanto com Navegador Web quanto com App Desktop Electron)
+   * Filtra o áudio do compartilhamento de tela para NUNCA transmitir a voz/sons do próprio Janjacord (Zero Eco!)
+   * Combina:
+   * 1. Exclusão nativa de processo do Chromium/Windows (`restrictOwnAudio: true` + `disableLocalEcho: true`)
+   * 2. Ducking/Gate inteligente em tempo real: se o sistema operacional não suportar `restrictOwnAudio` nativo,
+   *    corta instantaneamente o loopback no exato momento em que qualquer amigo na call estiver falando!
+   */
+  private buildEchoFreeScreenStream(rawStream: MediaStream): MediaStream {
+    const videoTracks = rawStream.getVideoTracks();
+    const audioTracks = rawStream.getAudioTracks();
+
+    if (audioTracks.length === 0) {
+      return rawStream;
+    }
+
+    const rawAudioTrack = audioTracks[0];
+    const settings = (rawAudioTrack.getSettings ? rawAudioTrack.getSettings() : {}) as any;
+    const hasNativeOwnAudioExclusion = settings.restrictOwnAudio === true;
+
+    try {
+      const ctx = this.getAudioContext();
+      const source = ctx.createMediaStreamSource(new MediaStream([rawAudioTrack]));
+      const gainNode = ctx.createGain();
+      gainNode.gain.value = 1.0;
+      const destination = ctx.createMediaStreamDestination();
+
+      source.connect(gainNode);
+      gainNode.connect(destination);
+      this.screenAudioGainNode = gainNode;
+
+      if (this.antiEchoInterval) {
+        clearInterval(this.antiEchoInterval);
+      }
+
+      const freqData = new Uint8Array(128);
+      this.antiEchoInterval = window.setInterval(() => {
+        if (!this.screenAudioGainNode || !this.audioContext) return;
+
+        // Se o SO já exclui nativamente o processo do Janjacord via WASAPI Process Loopback, mantém ganho 1.0
+        if (hasNativeOwnAudioExclusion) {
+          return;
+        }
+
+        // Caso contrário, verifica se algum participante remoto na call está falando neste exato instante
+        let remoteSpeakingNow = false;
+        for (const { analyser } of this.remoteVoiceAnalysers.values()) {
+          analyser.getByteFrequencyData(freqData);
+          let sum = 0;
+          for (let i = 0; i < freqData.length; i++) sum += freqData[i];
+          const avg = sum / freqData.length;
+          if (avg > 10) {
+            remoteSpeakingNow = true;
+            break;
+          }
+        }
+
+        // Se algum amigo estiver falando no Janjacord, zera o ganho do loopback do PC para a voz dele nunca dar eco!
+        const targetGain = remoteSpeakingNow ? 0.0 : 1.0;
+        const timeConstant = remoteSpeakingNow ? 0.01 : 0.08;
+        this.screenAudioGainNode.gain.setTargetAtTime(
+          targetGain,
+          this.audioContext.currentTime,
+          timeConstant
+        );
+      }, 35);
+
+      const processedAudioTrack = destination.stream.getAudioTracks()[0];
+      if (processedAudioTrack) {
+        return new MediaStream([...videoTracks, processedAudioTrack]);
+      }
+    } catch (err) {
+      console.warn('[WebRTC] Aviso ao criar filtro anti-eco WebAudio:', err);
+    }
+
+    return rawStream;
+  }
+
+  /**
+   * Inicia o compartilhamento de tela (compatível com Navegador Web e App Desktop Electron)
    */
   public async startScreenShare(
     presetKey: StreamQualityPreset,
@@ -242,76 +360,90 @@ export class WebRTCManager {
   ): Promise<MediaStream> {
     const preset = QUALITY_PRESETS[presetKey];
 
-    // Se já houver uma transmissão ativa, encerra antes de iniciar a nova
     if (this.screenStream) {
       this.stopScreenShare();
     }
 
     let acquiredStream: MediaStream | null = null;
 
+    // Constraints de áudio que instruem o Chromium/Electron a excluir o próprio áudio do Janjacord
+    const antiEchoAudioConstraints: any = shareAudio
+      ? {
+          restrictOwnAudio: true,
+          disableLocalEcho: true,
+          suppressLocalAudioPlayback: false,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        }
+      : false;
+
     if (window.electronAPI?.isElectron) {
-      // 1. Informa ao processo principal do Electron qual tela/janela o usuário selecionou
       if (sourceId) {
         await window.electronAPI.selectDesktopSource({ sourceId, shareAudio });
       }
 
-      // 2. Tenta capturar via getDisplayMedia (interceptado por setDisplayMediaRequestHandler no main.cjs)
       try {
         acquiredStream = await navigator.mediaDevices.getDisplayMedia({
           video: true,
-          audio: shareAudio,
-        });
+          audio: antiEchoAudioConstraints,
+          systemAudio: 'include',
+          selfBrowserSurface: 'exclude',
+        } as any);
       } catch (err1) {
-        console.warn('[WebRTC Electron] Tentativa 1 (vídeo + áudio loopback) falhou, tentando somente vídeo:', err1);
+        console.warn('[WebRTC Electron] Tentativa 1 falhou, tentando vídeo + áudio simples:', err1);
         try {
-          await window.electronAPI.selectDesktopSource({ sourceId: sourceId || '', shareAudio: false });
           acquiredStream = await navigator.mediaDevices.getDisplayMedia({
             video: true,
-            audio: false,
+            audio: shareAudio,
           });
         } catch (err2) {
-          console.warn('[WebRTC Electron] Tentativa 2 falhou, usando chromeMediaSource desktop:', err2);
-          if (sourceId) {
-            acquiredStream = await navigator.mediaDevices.getUserMedia({
+          console.warn('[WebRTC Electron] Tentativa 2 falhou, tentando somente vídeo:', err2);
+          try {
+            await window.electronAPI.selectDesktopSource({ sourceId: sourceId || '', shareAudio: false });
+            acquiredStream = await navigator.mediaDevices.getDisplayMedia({
+              video: true,
               audio: false,
-              video: {
-                mandatory: {
-                  chromeMediaSource: 'desktop',
-                  chromeMediaSourceId: sourceId,
-                  maxWidth: preset.width,
-                  maxHeight: preset.height,
-                  maxFrameRate: preset.fps,
-                },
-              } as any,
             });
-          } else {
-            throw err2;
+          } catch (err3) {
+            if (sourceId) {
+              acquiredStream = await navigator.mediaDevices.getUserMedia({
+                audio: false,
+                video: {
+                  mandatory: {
+                    chromeMediaSource: 'desktop',
+                    chromeMediaSourceId: sourceId,
+                    maxWidth: preset.width,
+                    maxHeight: preset.height,
+                    maxFrameRate: preset.fps,
+                  },
+                } as any,
+              });
+            } else {
+              throw err3;
+            }
           }
         }
       }
     } else {
-      // Fluxo padrão do Navegador Web
       acquiredStream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           width: { ideal: preset.width, max: preset.width },
           height: { ideal: preset.height, max: preset.height },
           frameRate: { ideal: preset.fps, max: preset.fps },
         },
-        audio: shareAudio
-          ? {
-              echoCancellation: false,
-              noiseSuppression: false,
-              autoGainControl: false,
-            }
-          : false,
-      });
+        audio: antiEchoAudioConstraints,
+        systemAudio: 'include',
+        selfBrowserSurface: 'exclude',
+      } as any);
     }
 
     if (!acquiredStream) {
       throw new Error('Não foi possível obter a transmissão de tela.');
     }
 
-    this.screenStream = acquiredStream;
+    this.rawScreenStream = acquiredStream;
+    this.screenStream = this.buildEchoFreeScreenStream(acquiredStream);
 
     const videoTrack = this.screenStream.getVideoTracks()[0];
     if (videoTrack) {
@@ -319,7 +451,6 @@ export class WebRTCManager {
         videoTrack.contentHint = 'motion';
       }
 
-      // Aplica limites de resolução e FPS de forma segura sem derrubar a stream
       try {
         await videoTrack.applyConstraints({
           width: { ideal: preset.width, max: preset.width },
@@ -336,7 +467,6 @@ export class WebRTCManager {
       };
     }
 
-    // Anexa as tracks de vídeo (e áudio do sistema, se presente) a todos os peers conectados
     for (const [peerId, pc] of this.peerConnections.entries()) {
       for (const track of this.screenStream.getTracks()) {
         const sender = pc.addTrack(track, this.screenStream);
@@ -393,10 +523,20 @@ export class WebRTCManager {
   }
 
   public stopScreenShare() {
-    if (!this.screenStream) return;
+    if (this.antiEchoInterval) {
+      clearInterval(this.antiEchoInterval);
+      this.antiEchoInterval = null;
+    }
+    this.screenAudioGainNode = null;
 
-    const screenTracks = new Set(this.screenStream.getTracks());
-    this.screenStream.getTracks().forEach((track) => {
+    if (!this.screenStream && !this.rawScreenStream) return;
+
+    const screenTracks = new Set([
+      ...(this.screenStream ? this.screenStream.getTracks() : []),
+      ...(this.rawScreenStream ? this.rawScreenStream.getTracks() : []),
+    ]);
+
+    screenTracks.forEach((track) => {
       track.onended = null;
       track.stop();
     });
@@ -414,6 +554,7 @@ export class WebRTCManager {
     }
 
     this.screenStream = null;
+    this.rawScreenStream = null;
   }
 
   private async renegotiate(peerId: string, pc?: RTCPeerConnection) {
@@ -437,6 +578,14 @@ export class WebRTCManager {
   }
 
   private closePeerConnection(peerId: string) {
+    const analyserEntry = this.remoteVoiceAnalysers.get(peerId);
+    if (analyserEntry) {
+      try {
+        analyserEntry.source.disconnect();
+      } catch {}
+      this.remoteVoiceAnalysers.delete(peerId);
+    }
+
     const pc = this.peerConnections.get(peerId);
     if (pc) {
       pc.close();
@@ -450,9 +599,16 @@ export class WebRTCManager {
       clearInterval(this.speakingInterval);
       this.speakingInterval = null;
     }
-    if (this.audioContext) {
-      this.audioContext.close().catch(() => {});
-      this.audioContext = null;
+    if (this.antiEchoInterval) {
+      clearInterval(this.antiEchoInterval);
+      this.antiEchoInterval = null;
+    }
+    this.remoteVoiceAnalysers.clear();
+    this.screenAudioGainNode = null;
+
+    if (this.rawScreenStream) {
+      this.rawScreenStream.getTracks().forEach((t) => t.stop());
+      this.rawScreenStream = null;
     }
     if (this.screenStream) {
       this.screenStream.getTracks().forEach((t) => t.stop());
@@ -461,6 +617,10 @@ export class WebRTCManager {
     if (this.localStream) {
       this.localStream.getTracks().forEach((t) => t.stop());
       this.localStream = null;
+    }
+    if (this.audioContext) {
+      this.audioContext.close().catch(() => {});
+      this.audioContext = null;
     }
     for (const peerId of this.peerConnections.keys()) {
       this.closePeerConnection(peerId);

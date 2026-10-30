@@ -93,6 +93,9 @@ export interface ServerItem {
   id: string;
   name: string;
   iconColor: string;
+  iconUrl?: string;
+  bannerUrl?: string;
+  description?: string;
   ownerId: string;
   inviteCode: string;
   members: string[];
@@ -143,6 +146,7 @@ export interface ServerInviteAttachment {
   serverId: string;
   serverName: string;
   iconColor: string;
+  iconUrl?: string;
   inviteCode: string;
   inviterName: string;
   status: 'pending' | 'accepted' | 'declined';

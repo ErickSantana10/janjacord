@@ -21,11 +21,6 @@ import {
   Phone,
   PhoneOff,
   Plus,
-  Mic,
-  MicOff,
-  Headphones,
-  Settings,
-  LogOut,
   Download,
   Home,
   Volume2,
@@ -109,6 +104,21 @@ export const App: React.FC = () => {
 
   const isElectron = Boolean(window.electronAPI?.isElectron);
 
+  const deduplicateOnlineUsers = (list: OnlineUser[]): OnlineUser[] => {
+    const byId = new Map<string, OnlineUser>();
+    for (const u of list || []) {
+      const existing = byId.get(u.id);
+      if (
+        !existing ||
+        (!existing.currentVoiceChannel && u.currentVoiceChannel) ||
+        (!existing.isScreenSharing && u.isScreenSharing)
+      ) {
+        byId.set(u.id, u);
+      }
+    }
+    return Array.from(byId.values());
+  };
+
   const showToast = (text: string, type: 'error' | 'info' = 'error') => {
     setToast({ text, type });
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
@@ -178,7 +188,7 @@ export const App: React.FC = () => {
             setMessages(res.state.messages || []);
             setDmMessages(res.state.dmMessages || []);
             setFriends(res.state.friends || []);
-            setOnlineUsers(res.state.onlineUsers || []);
+            setOnlineUsers(deduplicateOnlineUsers(res.state.onlineUsers || []));
             setIsAuthenticated(true);
 
             if (activeChannelRef.current?.type === 'media') {
@@ -201,7 +211,7 @@ export const App: React.FC = () => {
     socket.on('connect', restoreSession);
 
     socket.on('online:list', (list: OnlineUser[]) => {
-      setOnlineUsers(list);
+      setOnlineUsers(deduplicateOnlineUsers(list));
       // Remove imediatamente transmissões de tela de quem parou de compartilhar
       setRemoteStreams((prev) =>
         prev.filter((item) => {
@@ -355,7 +365,7 @@ export const App: React.FC = () => {
         setMessages(res.state.messages || []);
         setDmMessages(res.state.dmMessages || []);
         setFriends(res.state.friends || []);
-        setOnlineUsers(res.state.onlineUsers || []);
+        setOnlineUsers(deduplicateOnlineUsers(res.state.onlineUsers || []));
         setIsAuthenticated(true);
         callback();
       } else {
@@ -383,7 +393,7 @@ export const App: React.FC = () => {
           setMessages(res.state.messages || []);
           setDmMessages(res.state.dmMessages || []);
           setFriends(res.state.friends || []);
-          setOnlineUsers(res.state.onlineUsers || []);
+          setOnlineUsers(deduplicateOnlineUsers(res.state.onlineUsers || []));
           setIsAuthenticated(true);
           callback();
         } else {
@@ -405,7 +415,7 @@ export const App: React.FC = () => {
     handleLeaveVoice();
   };
 
-  const handleSaveProfile = (updates: { name: string; avatarColor: string; avatarUrl?: string }) => {
+  const handleSaveProfile = (updates: { name: string; avatarColor: string; avatarUrl?: string; bio?: string }) => {
     socketRef.current?.emit('user:update-profile', updates, (res: { success: boolean; error?: string; user?: any }) => {
       if (res?.success && res.user) {
         const u: User = { ...res.user, name: res.user.name || res.user.displayName || res.user.username, tag: res.user.tag || '001' };
@@ -460,14 +470,23 @@ export const App: React.FC = () => {
     setVoiceViewMode('stage');
   };
 
-  const handleCreateServer = (name: string, iconColor: string, callback?: (error?: string) => void) => {
-    socketRef.current?.emit('server:create', { name, iconColor }, (res: { success: boolean; error?: string; server?: ServerItem }) => {
-      if (res.success && res.server) {
-        callback?.();
-      } else {
-        callback?.(res.error || 'Erro ao criar servidor.');
+  const handleCreateServer = (
+    name: string,
+    iconColor: string,
+    callback?: (error?: string) => void,
+    extra?: { iconUrl?: string; description?: string }
+  ) => {
+    socketRef.current?.emit(
+      'server:create',
+      { name, iconColor, iconUrl: extra?.iconUrl, description: extra?.description },
+      (res: { success: boolean; error?: string; server?: ServerItem }) => {
+        if (res.success && res.server) {
+          callback?.();
+        } else {
+          callback?.(res.error || 'Erro ao criar servidor.');
+        }
       }
-    });
+    );
   };
 
   const handleCreateChannel = (name: string, type: 'text' | 'voice' | 'media') => {
@@ -487,11 +506,26 @@ export const App: React.FC = () => {
     });
   };
 
-  const handleUpdateServerSettings = (name: string, iconColor: string) => {
+  const handleUpdateServerSettings = (
+    name: string,
+    iconColor: string,
+    extra?: { iconUrl?: string; bannerUrl?: string; description?: string }
+  ) => {
     if (!currentServer) return;
-    socketRef.current?.emit('server:update-settings', { serverId: currentServer.id, name, iconColor }, (res: any) => {
-      if (res?.error) showToast(res.error, 'error');
-    });
+    socketRef.current?.emit(
+      'server:update-settings',
+      {
+        serverId: currentServer.id,
+        name,
+        iconColor,
+        iconUrl: extra?.iconUrl,
+        bannerUrl: extra?.bannerUrl,
+        description: extra?.description,
+      },
+      (res: any) => {
+        if (res?.error) showToast(res.error, 'error');
+      }
+    );
   };
 
   const handleCreateRole = (name: string, color: string, isAdmin: boolean) => {
@@ -990,12 +1024,20 @@ export const App: React.FC = () => {
                 }`}
                 title={server.name}
               >
-                <div
-                  className="w-7 h-7 rounded-xl flex items-center justify-center font-black text-white text-xs shadow-sm shrink-0"
-                  style={{ backgroundColor: server.iconColor }}
-                >
-                  {getServerInitials(server.name)}
-                </div>
+                {server.iconUrl ? (
+                  <img
+                    src={server.iconUrl}
+                    alt={server.name}
+                    className="w-7 h-7 rounded-xl object-cover shadow-sm border border-violet-400/30 shrink-0"
+                  />
+                ) : (
+                  <div
+                    className="w-7 h-7 rounded-xl flex items-center justify-center font-black text-white text-xs shadow-sm shrink-0"
+                    style={{ backgroundColor: server.iconColor }}
+                  >
+                    {getServerInitials(server.name)}
+                  </div>
+                )}
                 <span className="text-xs font-bold max-w-[120px] truncate">{server.name}</span>
               </button>
             );
@@ -1012,7 +1054,7 @@ export const App: React.FC = () => {
           </button>
         </div>
 
-        {/* Right: Active Call Pill + Download Desktop App Button + User Capsule */}
+        {/* Right: Active Call Pill + Download Desktop App Button */}
         <div className="flex items-center gap-2.5 shrink-0">
           {/* Active Voice Call Pill in Top Bar */}
           {currentVoiceChannelId && (
@@ -1045,83 +1087,6 @@ export const App: React.FC = () => {
               <span>Baixar App</span>
             </button>
           )}
-
-          {/* User Control Capsule */}
-          <div className="flex items-center gap-2 bg-[#120b20]/90 border border-violet-500/20 pl-2 pr-2.5 py-1.5 rounded-2xl shadow-lg">
-            <div
-              onClick={() => setIsSettingsOpen(true)}
-              className="flex items-center gap-2 cursor-pointer group pr-1"
-              title="Editar Perfil e Foto"
-            >
-              <div className="relative shrink-0">
-                {currentUser?.avatarUrl ? (
-                  <img
-                    src={currentUser.avatarUrl}
-                    alt={currentUser.displayName}
-                    className={`w-8 h-8 rounded-xl object-cover transition-all ${
-                      isSpeaking ? 'ring-2 ring-emerald-400' : ''
-                    }`}
-                  />
-                ) : (
-                  <div
-                    className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold text-white text-xs transition-all ${
-                      isSpeaking ? 'ring-2 ring-emerald-400' : ''
-                    }`}
-                    style={{ backgroundColor: currentUser?.avatarColor || '#8b5cf6' }}
-                  >
-                    {(currentUser?.displayName || '?').slice(0, 1).toUpperCase()}
-                  </div>
-                )}
-                <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-[#120b20]" />
-              </div>
-
-              <div className="hidden sm:block text-left max-w-[110px]">
-                <div className="text-xs font-bold text-slate-100 truncate group-hover:text-violet-300 transition leading-tight">
-                  {currentUser?.name || currentUser?.displayName || 'Jogador'}
-                </div>
-                <div className="text-[10px] text-violet-300/60 font-mono leading-tight">
-                  #{currentUser?.tag || '001'}
-                </div>
-              </div>
-            </div>
-
-            <div className="w-[1px] h-5 bg-violet-500/20" />
-
-            <div className="flex items-center gap-0.5">
-              <button
-                onClick={handleToggleMute}
-                className={`p-1.5 rounded-xl hover:bg-violet-500/15 transition cursor-pointer ${
-                  isMuted ? 'text-rose-400 bg-rose-500/10' : 'text-slate-300 hover:text-white'
-                }`}
-                title={isMuted ? 'Desmutar Microfone' : 'Mutar Microfone'}
-              >
-                {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-              </button>
-              <button
-                onClick={handleToggleDeafen}
-                className={`p-1.5 rounded-xl hover:bg-violet-500/15 transition cursor-pointer ${
-                  isDeafened ? 'text-rose-400 bg-rose-500/10' : 'text-slate-300 hover:text-white'
-                }`}
-                title={isDeafened ? 'Reativar Áudio' : 'Ensurdecer'}
-              >
-                <Headphones className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setIsSettingsOpen(true)}
-                className="p-1.5 rounded-xl text-slate-300 hover:text-white hover:bg-violet-500/15 transition cursor-pointer"
-                title="Configurações de Perfil"
-              >
-                <Settings className="w-4 h-4" />
-              </button>
-              <button
-                onClick={handleLogout}
-                className="p-1.5 rounded-xl text-slate-400 hover:text-rose-400 hover:bg-rose-500/15 transition cursor-pointer"
-                title="Sair da Conta"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
         </div>
       </header>
 

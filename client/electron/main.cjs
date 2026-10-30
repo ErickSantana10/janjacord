@@ -3,9 +3,12 @@ const path = require('path');
 const http = require('http');
 const fs = require('fs');
 
-// Melhora compatibilidade de captura de tela, WebRTC e áudio loopback no Windows
+// Melhora compatibilidade de captura de tela, WebRTC e exclui o próprio áudio do Janjacord no loopback do Windows (Zero Eco!)
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
-app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer');
+app.commandLine.appendSwitch(
+  'enable-features',
+  'RestrictOwnAudio,SystemLoopbackAsAecReference,WebRTCPipeWireCapturer'
+);
 
 let mainWindow = null;
 let selectedSourceId = null;

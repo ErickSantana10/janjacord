@@ -2,7 +2,9 @@ import React, { useState } from 'react';
 import {
   Hash,
   Volume2,
+  Mic,
   MicOff,
+  Headphones,
   Settings,
   PhoneOff,
   Plus,
@@ -55,6 +57,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeDMFriendId,
   friends,
   onlineUsers,
+  isMuted,
+  isDeafened,
   isSpeaking,
   onSelectHome,
   onSelectDM,
@@ -66,6 +70,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onJoinVoice,
   onViewVoiceRoom,
   onLeaveVoice,
+  onToggleMute,
+  onToggleDeafen,
+  onOpenSettings,
+  onLogout,
 }) => {
   const isAtHome = currentServer === null;
   const [isServerMenuOpen, setIsServerMenuOpen] = useState(false);
@@ -84,36 +92,104 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside className="w-64 h-full bg-[#110b1f]/90 backdrop-blur-xl border border-violet-500/15 rounded-3xl flex flex-col justify-between overflow-hidden shadow-2xl select-none shrink-0">
       <div className="flex flex-col flex-1 min-h-0">
-        {/* Top Context Header */}
+        {/* Top Context Header (with Server Banner & Icon Personalization) */}
         {currentServer ? (
           <div className="relative shrink-0">
-            <div
-              onClick={() => setIsServerMenuOpen(!isServerMenuOpen)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setIsServerMenuOpen(true);
-              }}
-              className="h-14 px-4 border-b border-violet-500/15 flex items-center justify-between font-bold text-slate-100 bg-gradient-to-r from-violet-950/30 to-transparent hover:from-violet-900/40 transition cursor-pointer select-none"
-            >
-              <span className="flex items-center gap-2.5 truncate">
-                <span
-                  className="w-3 h-3 rounded-full shrink-0 shadow-sm"
-                  style={{ backgroundColor: currentServer.iconColor }}
+            {currentServer.bannerUrl ? (
+              <div
+                onClick={() => setIsServerMenuOpen(!isServerMenuOpen)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setIsServerMenuOpen(true);
+                }}
+                className="relative h-24 w-full border-b border-violet-500/20 overflow-hidden cursor-pointer group select-none"
+              >
+                <img
+                  src={currentServer.bannerUrl}
+                  alt={currentServer.name}
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                 />
-                <span className="truncate text-sm font-extrabold tracking-tight">{currentServer.name}</span>
-              </span>
-              <ChevronDown
-                className={`w-4 h-4 text-violet-300/70 transition-transform duration-200 ${
-                  isServerMenuOpen ? 'rotate-180 text-white' : ''
-                }`}
-              />
-            </div>
+                <div className="absolute inset-0 bg-gradient-to-t from-[#0d0818] via-[#0d0818]/50 to-black/20" />
+                <div className="absolute bottom-2.5 left-3.5 right-3.5 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    {currentServer.iconUrl ? (
+                      <img
+                        src={currentServer.iconUrl}
+                        alt={currentServer.name}
+                        className="w-8 h-8 rounded-xl object-cover border border-white/20 shadow-md shrink-0"
+                      />
+                    ) : (
+                      <span
+                        className="w-7 h-7 rounded-xl flex items-center justify-center text-[11px] font-black text-white shadow-md shrink-0"
+                        style={{ backgroundColor: currentServer.iconColor }}
+                      >
+                        {currentServer.name.slice(0, 2).toUpperCase()}
+                      </span>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-black text-white drop-shadow">
+                        {currentServer.name}
+                      </div>
+                      {currentServer.description && (
+                        <div className="truncate text-[10px] text-violet-200/80">
+                          {currentServer.description}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <ChevronDown
+                    className={`w-4 h-4 text-white/80 shrink-0 transition-transform duration-200 ${
+                      isServerMenuOpen ? 'rotate-180 text-white' : ''
+                    }`}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div
+                onClick={() => setIsServerMenuOpen(!isServerMenuOpen)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setIsServerMenuOpen(true);
+                }}
+                className="min-h-14 py-2.5 px-4 border-b border-violet-500/15 flex items-center justify-between font-bold text-slate-100 bg-gradient-to-r from-violet-950/30 to-transparent hover:from-violet-900/40 transition cursor-pointer select-none"
+              >
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                  {currentServer.iconUrl ? (
+                    <img
+                      src={currentServer.iconUrl}
+                      alt={currentServer.name}
+                      className="w-7 h-7 rounded-xl object-cover border border-violet-400/30 shrink-0 shadow-sm"
+                    />
+                  ) : (
+                    <span
+                      className="w-3.5 h-3.5 rounded-full shrink-0 shadow-sm"
+                      style={{ backgroundColor: currentServer.iconColor }}
+                    />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-extrabold tracking-tight">
+                      {currentServer.name}
+                    </div>
+                    {currentServer.description && (
+                      <div className="truncate text-[10px] font-medium text-violet-300/60">
+                        {currentServer.description}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <ChevronDown
+                  className={`w-4 h-4 text-violet-300/70 shrink-0 transition-transform duration-200 ${
+                    isServerMenuOpen ? 'rotate-180 text-white' : ''
+                  }`}
+                />
+              </div>
+            )}
 
             {/* Server Dropdown Menu */}
             {isServerMenuOpen && (
               <>
                 <div className="fixed inset-0 z-30" onClick={() => setIsServerMenuOpen(false)} />
-                <div className="absolute top-15 left-3 right-3 z-40 bg-[#140d26] border border-violet-500/30 rounded-2xl shadow-2xl p-1.5 space-y-0.5 animate-in fade-in duration-150">
+                <div className="absolute top-14 left-3 right-3 z-40 bg-[#140d26] border border-violet-500/35 rounded-2xl shadow-2xl p-1.5 space-y-0.5 animate-in fade-in duration-150">
                   <button
                     onClick={() => {
                       setIsServerMenuOpen(false);
@@ -145,7 +221,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-200 hover:bg-violet-500/15 hover:text-white transition cursor-pointer"
                     >
                       <Settings className="w-4 h-4 text-violet-400" />
-                      <span>Configurações do Servidor</span>
+                      <span>Personalizar & Configurar</span>
                     </button>
                   )}
 
@@ -330,7 +406,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="space-y-1.5 mt-1">
                   {voiceChannels.map((channel) => {
                     const isConnectedHere = currentVoiceChannelId === channel.id;
-                    const membersInThisVoice = onlineUsers.filter((u) => u.currentVoiceChannel === channel.id);
+                    // Deduplicate members in this voice channel by member.id
+                    const rawMembers = onlineUsers.filter((u) => u.currentVoiceChannel === channel.id);
+                    const membersInThisVoice = Array.from(
+                      new Map(rawMembers.map((m) => [m.id, m])).values()
+                    );
 
                     return (
                       <div key={channel.id} className="space-y-1">
@@ -348,19 +428,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               : 'text-slate-400 hover:bg-violet-500/10 hover:text-slate-200'
                           }`}
                         >
-                          <div className="flex items-center gap-2.5 truncate">
-                            <Volume2 className={`w-4 h-4 ${isConnectedHere ? 'text-violet-400 animate-pulse' : 'text-slate-500'}`} />
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            <Volume2
+                              className={`w-4 h-4 shrink-0 ${
+                                isConnectedHere ? 'text-violet-400 animate-pulse' : 'text-slate-500'
+                              }`}
+                            />
                             <span className="truncate">{channel.name}</span>
                           </div>
                           {isConnectedHere && (
-                            <span className="text-[10px] bg-violet-500/30 text-violet-200 px-1.5 py-0.5 rounded-md font-bold">
+                            <span className="text-[10px] bg-violet-500/30 text-violet-200 px-1.5 py-0.5 rounded-md font-bold shrink-0">
                               na call
                             </span>
                           )}
                         </button>
 
                         {membersInThisVoice.length > 0 && (
-                          <div className="pl-5 pr-2.5 py-1.5 space-y-1 bg-[#0b0714]/70 border border-violet-500/10 rounded-2xl">
+                          <div className="pl-3.5 pr-2.5 py-1.5 space-y-1 bg-[#0b0714]/70 border border-violet-500/10 rounded-2xl">
                             {membersInThisVoice.map((member) => {
                               const isMe = member.id === currentUser?.id;
                               const memberSpeaking = isMe ? isSpeaking : false;
@@ -368,35 +452,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               return (
                                 <div
                                   key={member.id}
-                                  className="flex items-center justify-between py-1 text-xs text-slate-200"
+                                  className="flex items-center justify-between py-1 px-1 text-xs text-slate-200"
                                 >
-                                  <div className="flex items-center gap-2 truncate">
-                                    <div className="relative shrink-0">
+                                  {/* Notice: NO overflow-hidden/truncate on the outer flex container so the speaking ring is NEVER clipped! */}
+                                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                    <div className="relative p-0.5 shrink-0">
                                       {member.avatarUrl ? (
                                         <img
                                           src={member.avatarUrl}
                                           alt={member.displayName || member.username}
-                                          className={`w-5 h-5 rounded-full object-cover transition-all ${
-                                            memberSpeaking ? 'ring-2 ring-violet-400' : ''
+                                          className={`w-6 h-6 rounded-full object-cover transition-all duration-150 ${
+                                            memberSpeaking
+                                              ? 'ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#0b0714] shadow-[0_0_10px_rgba(52,211,153,0.65)]'
+                                              : ''
                                           }`}
                                         />
                                       ) : (
                                         <div
-                                          className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white transition-all ${
-                                            memberSpeaking ? 'ring-2 ring-violet-400' : ''
+                                          className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white transition-all duration-150 ${
+                                            memberSpeaking
+                                              ? 'ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#0b0714] shadow-[0_0_10px_rgba(52,211,153,0.65)]'
+                                              : ''
                                           }`}
                                           style={{ backgroundColor: member.avatarColor }}
                                         >
-                                          {(member.name || member.displayName || '?').slice(0, 1).toUpperCase()}
+                                          {(member.name || member.displayName || '?')
+                                            .slice(0, 1)
+                                            .toUpperCase()}
                                         </div>
                                       )}
                                     </div>
-                                    <span className="truncate text-slate-300 font-medium text-[11px]">
+                                    <span
+                                      className={`truncate font-semibold text-[11px] transition-colors ${
+                                        memberSpeaking ? 'text-emerald-300' : 'text-slate-200'
+                                      }`}
+                                    >
                                       {member.name || member.displayName}
                                     </span>
                                   </div>
 
-                                  <div className="flex items-center gap-1 text-slate-400">
+                                  <div className="flex items-center gap-1 text-slate-400 shrink-0 pl-1">
                                     {member.isScreenSharing && (
                                       <span title="Transmitindo tela">
                                         <Monitor className="w-3 h-3 text-fuchsia-400 animate-pulse" />
@@ -456,31 +551,117 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Bottom Active Voice Banner inside Sidebar */}
-      {currentVoiceChannelId && (
-        <div className="bg-gradient-to-r from-violet-950/70 to-fuchsia-950/50 px-3.5 py-2.5 border-t border-violet-500/20 flex items-center justify-between shrink-0">
-          <div
-            className="flex items-center gap-2.5 cursor-pointer group flex-1 truncate"
-            onClick={onViewVoiceRoom}
-            title="Clique para abrir o palco da chamada"
-          >
-            <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-            <div className="truncate">
-              <div className="text-xs font-bold text-violet-200 group-hover:text-white truncate">
-                Call Conectada
+      {/* Bottom Section: Active Voice Status + User Profile & Mute Controls (Bottom-Left Corner!) */}
+      <div className="shrink-0">
+        {currentVoiceChannelId && (
+          <div className="bg-gradient-to-r from-violet-950/80 to-fuchsia-950/60 px-3.5 py-2 border-t border-violet-500/20 flex items-center justify-between">
+            <div
+              className="flex items-center gap-2.5 cursor-pointer group flex-1 min-w-0"
+              onClick={onViewVoiceRoom}
+              title="Clique para abrir o palco da chamada"
+            >
+              <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-bold text-violet-200 group-hover:text-white truncate">
+                  Call Conectada
+                </div>
+                <div className="text-[10px] text-violet-300/70 truncate">Voltar para transmissão</div>
               </div>
-              <div className="text-[10px] text-violet-300/70 truncate">Voltar para transmissão</div>
+            </div>
+            <button
+              onClick={onLeaveVoice}
+              className="p-1.5 text-slate-300 hover:text-rose-400 hover:bg-rose-500/15 rounded-xl transition shrink-0 ml-1 cursor-pointer"
+              title="Desconectar da Voz"
+            >
+              <PhoneOff className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* User Profile & Mute/Deafen/Settings Bar in the Bottom-Left Corner */}
+        <div className="p-2.5 bg-[#0b0714]/95 border-t border-violet-500/20 flex items-center justify-between gap-1.5">
+          <div
+            onClick={onOpenSettings}
+            className="flex items-center gap-2.5 min-w-0 flex-1 p-1 rounded-2xl hover:bg-violet-500/10 transition cursor-pointer group"
+            title="Editar Perfil e Foto"
+          >
+            {/* Padding p-0.5 + shrink-0 so the speaking ring is never clipped */}
+            <div className="relative p-0.5 shrink-0">
+              {currentUser?.avatarUrl ? (
+                <img
+                  src={currentUser.avatarUrl}
+                  alt={currentUser.displayName}
+                  className={`w-9 h-9 rounded-full object-cover transition-all duration-150 ${
+                    isSpeaking
+                      ? 'ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#0b0714] shadow-[0_0_10px_rgba(52,211,153,0.65)]'
+                      : ''
+                  }`}
+                />
+              ) : (
+                <div
+                  className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-white text-xs transition-all duration-150 ${
+                    isSpeaking
+                      ? 'ring-2 ring-emerald-400 ring-offset-2 ring-offset-[#0b0714] shadow-[0_0_10px_rgba(52,211,153,0.65)]'
+                      : ''
+                  }`}
+                  style={{ backgroundColor: currentUser?.avatarColor || '#8b5cf6' }}
+                >
+                  {(currentUser?.displayName || '?').slice(0, 1).toUpperCase()}
+                </div>
+              )}
+              <div className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 rounded-full border-2 border-[#0b0714]" />
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-extrabold text-white truncate group-hover:text-violet-300 transition leading-tight">
+                {currentUser?.name || currentUser?.displayName || 'Jogador'}
+              </div>
+              <div className="text-[10px] text-violet-300/60 font-mono truncate leading-tight">
+                {isMuted ? 'Microfone mutado' : `#${currentUser?.tag || '001'}`}
+              </div>
             </div>
           </div>
-          <button
-            onClick={onLeaveVoice}
-            className="p-2 text-slate-300 hover:text-rose-400 hover:bg-rose-500/15 rounded-xl transition shrink-0 ml-1 cursor-pointer"
-            title="Desconectar da Voz"
-          >
-            <PhoneOff className="w-4 h-4" />
-          </button>
+
+          <div className="flex items-center gap-0.5 shrink-0">
+            <button
+              onClick={onToggleMute}
+              className={`p-2 rounded-xl transition cursor-pointer ${
+                isMuted
+                  ? 'text-rose-400 bg-rose-500/15 hover:bg-rose-500/25'
+                  : 'text-slate-300 hover:text-white hover:bg-violet-500/15'
+              }`}
+              title={isMuted ? 'Desmutar Microfone' : 'Mutar Microfone'}
+            >
+              {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+            </button>
+            <button
+              onClick={onToggleDeafen}
+              className={`p-2 rounded-xl transition cursor-pointer ${
+                isDeafened
+                  ? 'text-rose-400 bg-rose-500/15 hover:bg-rose-500/25'
+                  : 'text-slate-300 hover:text-white hover:bg-violet-500/15'
+              }`}
+              title={isDeafened ? 'Reativar Áudio' : 'Ensurdecer'}
+            >
+              <Headphones className="w-4 h-4" />
+            </button>
+            <button
+              onClick={onOpenSettings}
+              className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-violet-500/15 transition cursor-pointer"
+              title="Configurações de Perfil"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+            <button
+              onClick={onLogout}
+              className="p-2 rounded-xl text-slate-400 hover:text-rose-400 hover:bg-rose-500/15 transition cursor-pointer"
+              title="Sair da Conta"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
         </div>
-      )}
+      </div>
 
       {/* Modal: Impulso de Servidor */}
       {isBoostModalOpen && currentServer && (
