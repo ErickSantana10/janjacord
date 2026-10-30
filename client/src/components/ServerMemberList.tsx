@@ -19,7 +19,6 @@ export const ServerMemberList: React.FC<ServerMemberListProps> = ({
 }) => {
   const memberIds = server.members || [];
 
-  // Map of all known users to resolve offline info (avatar, name, etc.)
   const usersInfoMap = new Map<string, ServerMemberInfo>();
   allMembersInfo.forEach((u) => usersInfoMap.set(u.id, u));
   if (currentUser) {
@@ -32,19 +31,16 @@ export const ServerMemberList: React.FC<ServerMemberListProps> = ({
     });
   }
 
-  // Filter server members that are currently online
   const serverOnlineMembers = onlineUsers.filter((ou) => memberIds.includes(ou.id));
   const onlineIds = new Set(serverOnlineMembers.map((ou) => ou.id));
-
-  // Offline member IDs
   const offlineMemberIds = memberIds.filter((id) => !onlineIds.has(id));
 
   return (
-    <div className="w-60 bg-[#161722] border-l border-[#222430] flex flex-col h-full select-none shrink-0 overflow-y-auto">
+    <div className="w-60 bg-[#120b22]/80 border-l border-violet-500/15 flex flex-col h-full select-none shrink-0 overflow-y-auto">
       {/* Header */}
-      <div className="p-3 border-b border-[#222430] flex items-center justify-between text-xs font-bold text-slate-400 uppercase tracking-wider bg-[#14151e]">
-        <span>Membros do Servidor</span>
-        <span className="bg-[#1f2130] px-2 py-0.5 rounded-full text-[11px] text-slate-300 font-mono">
+      <div className="h-14 px-4 border-b border-violet-500/15 flex items-center justify-between text-[11px] font-extrabold text-violet-300/70 uppercase tracking-widest shrink-0">
+        <span>Membros</span>
+        <span className="bg-violet-500/15 border border-violet-500/25 px-2 py-0.5 rounded-full text-[11px] text-violet-200 font-mono">
           {memberIds.length}
         </span>
       </div>
@@ -52,8 +48,8 @@ export const ServerMemberList: React.FC<ServerMemberListProps> = ({
       <div className="p-3 space-y-5 flex-1">
         {/* ONLINE SECTION */}
         <div className="space-y-1.5">
-          <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 px-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse" />
+          <div className="text-[10px] font-extrabold text-violet-300/60 uppercase tracking-widest flex items-center gap-1.5 px-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block animate-pulse" />
             <span>Disponível — {serverOnlineMembers.length}</span>
           </div>
 
@@ -68,7 +64,7 @@ export const ServerMemberList: React.FC<ServerMemberListProps> = ({
                 <div
                   key={member.id}
                   onClick={() => onSelectMember(member)}
-                  className="flex items-center gap-2.5 px-2 py-1.5 rounded-xl hover:bg-[#1f2132] transition group cursor-pointer"
+                  className="flex items-center gap-2.5 px-2.5 py-2 rounded-2xl hover:bg-violet-500/10 transition group cursor-pointer"
                   title={isMe ? `${displayName} (Você)` : displayName}
                 >
                   <div className="relative shrink-0">
@@ -81,17 +77,21 @@ export const ServerMemberList: React.FC<ServerMemberListProps> = ({
                     ) : (
                       <div
                         className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-xs"
-                        style={{ backgroundColor: member.avatarColor || '#6366f1' }}
+                        style={{ backgroundColor: member.avatarColor || '#8b5cf6' }}
                       >
                         {displayName.slice(0, 1).toUpperCase()}
                       </div>
                     )}
-                    <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-[#161722]" />
+                    <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-[#120b22]" />
                   </div>
 
                   <div className="min-w-0 flex-1 truncate">
                     <div className="flex items-center gap-1.5 truncate">
-                      <span className={`text-xs font-semibold truncate ${isOwner ? 'text-amber-400 font-bold' : 'text-slate-200 group-hover:text-white'}`}>
+                      <span
+                        className={`text-xs font-bold truncate ${
+                          isOwner ? 'text-fuchsia-300' : 'text-slate-200 group-hover:text-white'
+                        }`}
+                      >
                         {displayName}
                       </span>
                       {isOwner && (
@@ -103,21 +103,20 @@ export const ServerMemberList: React.FC<ServerMemberListProps> = ({
 
                     <div className="flex items-center gap-1 text-[10px] text-slate-400 truncate">
                       {inVoice ? (
-                        <span className="text-emerald-400 flex items-center gap-1 font-medium">
-                          <Volume2 className="w-3 h-3" />
-                          <span>Em chamada</span>
+                        <span className="text-violet-300 flex items-center gap-1 font-medium">
+                          <Volume2 className="w-3 h-3 text-violet-400" />
+                          <span>Em call</span>
                         </span>
                       ) : (
-                        <span className="text-slate-500">Online</span>
+                        <span className="text-violet-300/50">Online</span>
                       )}
                     </div>
                   </div>
 
-                  {/* Status indicators */}
                   <div className="flex items-center gap-1 text-slate-400 shrink-0">
                     {member.isScreenSharing && (
                       <span title="Compartilhando Tela">
-                        <Monitor className="w-3 h-3 text-indigo-400 animate-pulse" />
+                        <Monitor className="w-3 h-3 text-fuchsia-400 animate-pulse" />
                       </span>
                     )}
                     {member.isMuted && (
@@ -135,7 +134,7 @@ export const ServerMemberList: React.FC<ServerMemberListProps> = ({
         {/* OFFLINE SECTION */}
         {offlineMemberIds.length > 0 && (
           <div className="space-y-1.5 pt-2">
-            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5 px-2">
+            <div className="text-[10px] font-extrabold text-violet-300/40 uppercase tracking-widest flex items-center gap-1.5 px-2">
               <span className="w-2 h-2 rounded-full bg-slate-600 inline-block" />
               <span>Offline — {offlineMemberIds.length}</span>
             </div>
@@ -156,7 +155,7 @@ export const ServerMemberList: React.FC<ServerMemberListProps> = ({
                   <div
                     key={id}
                     onClick={() => onSelectMember(u)}
-                    className="flex items-center gap-2.5 px-2 py-1.5 rounded-xl opacity-60 hover:opacity-100 hover:bg-[#1f2132] transition group cursor-pointer"
+                    className="flex items-center gap-2.5 px-2.5 py-2 rounded-2xl opacity-55 hover:opacity-100 hover:bg-violet-500/10 transition group cursor-pointer"
                   >
                     <div className="relative shrink-0">
                       {avatarUrl ? (
@@ -173,7 +172,7 @@ export const ServerMemberList: React.FC<ServerMemberListProps> = ({
                           {displayName.slice(0, 1).toUpperCase()}
                         </div>
                       )}
-                      <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-slate-600 rounded-full border-2 border-[#161722]" />
+                      <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-slate-600 rounded-full border-2 border-[#120b22]" />
                     </div>
 
                     <div className="min-w-0 flex-1 truncate">

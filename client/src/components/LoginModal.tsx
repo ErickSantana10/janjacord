@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Flame, ArrowRight, Lock, User, AlertCircle } from 'lucide-react';
+import { LogIn, UserPlus, Sparkles, Lock, AlertCircle, Download, Monitor } from 'lucide-react';
 
 interface LoginModalProps {
   onLogin: (name: string, password: string, callback: (error?: string) => void) => void;
@@ -9,39 +9,52 @@ interface LoginModalProps {
     avatarColor: string,
     callback: (error?: string) => void
   ) => void;
+  downloadUrl?: string;
 }
 
-const COLOR_OPTIONS = [
+const AVATAR_COLORS = [
+  '#8b5cf6', // Violet
+  '#a855f7', // Purple
+  '#d946ef', // Fuchsia
+  '#ec4899', // Pink
   '#6366f1', // Indigo
   '#10b981', // Emerald
-  '#f43f5e', // Rose
-  '#f59e0b', // Amber
-  '#8b5cf6', // Violet
-  '#06b6d4', // Cyan
-  '#ec4899', // Pink
   '#3b82f6', // Blue
+  '#f59e0b', // Amber
 ];
 
-export const LoginModal: React.FC<LoginModalProps> = ({ onLogin, onRegister }) => {
-  const [tab, setTab] = useState<'login' | 'register'>('login');
+export const LoginModal: React.FC<LoginModalProps> = ({
+  onLogin,
+  onRegister,
+  downloadUrl = 'https://github.com/ErickSantana10/janjacord/releases/download/v1.0.0/Janjacord-Windows.exe',
+}) => {
+  const [mode, setMode] = useState<'login' | 'register'>('login');
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
-  const [selectedColor, setSelectedColor] = useState(COLOR_OPTIONS[0]);
+  const [selectedColor, setSelectedColor] = useState(AVATAR_COLORS[0]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const isElectron = Boolean(window.electronAPI?.isElectron);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    if (!name.trim() || !password.trim()) {
+      setError('Preencha seu nome e sua senha.');
+      return;
+    }
+
     setLoading(true);
 
-    if (tab === 'login') {
-      onLogin(name, password, (err) => {
+    if (mode === 'login') {
+      onLogin(name.trim(), password, (err) => {
         setLoading(false);
         if (err) setError(err);
       });
     } else {
-      onRegister(name, password, selectedColor, (err) => {
+      onRegister(name.trim(), password, selectedColor, (err) => {
         setLoading(false);
         if (err) setError(err);
       });
@@ -49,144 +62,180 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLogin, onRegister }) =
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#0c0d14]/90 backdrop-blur-md flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-[#161722] border border-[#27293b] rounded-3xl p-8 shadow-2xl relative overflow-hidden">
-        {/* Glow Effects */}
-        <div className="absolute -top-24 -right-24 w-48 h-48 bg-indigo-500/20 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-24 -left-24 w-48 h-48 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
+    <div className="fixed inset-0 z-50 bg-[#07040d] flex items-center justify-center p-4 select-none overflow-y-auto">
+      {/* Ambient Violet/Fuchsia Background Glow */}
+      <div className="fixed inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute -top-32 -left-32 w-96 h-96 rounded-full bg-violet-600/20 blur-[130px]" />
+        <div className="absolute -bottom-32 -right-32 w-96 h-96 rounded-full bg-fuchsia-600/20 blur-[130px]" />
+      </div>
 
-        <div className="flex flex-col items-center text-center space-y-3">
-          <div className="w-14 h-14 rounded-2xl bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-600/30">
-            <Flame className="w-8 h-8 text-white animate-pulse" />
+      <div className="w-full max-w-md bg-[#120b20]/90 backdrop-blur-2xl border border-violet-500/25 rounded-[2rem] shadow-2xl shadow-violet-950/60 overflow-hidden relative z-10">
+        {/* Top Banner with New Logo */}
+        <div className="bg-gradient-to-br from-violet-900/40 via-[#180f2c] to-fuchsia-900/30 p-7 text-center relative border-b border-violet-500/15">
+          <div className="relative w-20 h-20 mx-auto mb-3">
+            <div className="absolute inset-0 rounded-2xl bg-violet-500/40 blur-xl animate-pulse" />
+            <img
+              src="/logo.jpg"
+              alt="Janjacord"
+              className="relative w-20 h-20 rounded-2xl object-cover shadow-2xl border-2 border-violet-400/50"
+            />
           </div>
+          <h1 className="text-2xl font-black text-white tracking-tight">Janjacord</h1>
+          <p className="text-xs text-violet-200/75 mt-1">
+            Voz cristalina, salas de cinema sincronizadas e transmissão 60 FPS
+          </p>
+        </div>
 
+        {/* Mode Switcher */}
+        <div className="px-6 pt-5">
+          <div className="grid grid-cols-2 bg-[#0a0612] p-1 rounded-2xl border border-violet-500/15">
+            <button
+              type="button"
+              onClick={() => {
+                setMode('login');
+                setError(null);
+              }}
+              className={`py-2.5 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                mode === 'login'
+                  ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-lg shadow-violet-600/25'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span>Entrar</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMode('register');
+                setError(null);
+              }}
+              className={`py-2.5 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                mode === 'register'
+                  ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-lg shadow-violet-600/25'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>Criar Conta</span>
+            </button>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {error && (
+            <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {/* Name Input */}
           <div>
-            <h2 className="text-2xl font-black text-white tracking-tight">Janjacord</h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Voz, chat e compartilhamento de tela leve para o seu PC.
-            </p>
+            <label className="block text-xs font-bold uppercase tracking-wider text-violet-300/80 mb-1.5">
+              Seu Nome
+            </label>
+            <input
+              type="text"
+              required
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Ex: Erick"
+              maxLength={24}
+              className="w-full bg-[#0a0612] border border-violet-500/20 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-violet-500 transition select-text"
+            />
+            {mode === 'register' && (
+              <span className="text-[11px] text-violet-300/60 mt-1 block">
+                Uma # automática (ex: #001) será gerada caso outra pessoa tenha o mesmo nome.
+              </span>
+            )}
           </div>
-        </div>
 
-        {/* Tab Switcher */}
-        <div className="flex items-center bg-[#1b1c2a] p-1 rounded-xl border border-[#27293d] mt-6">
-          <button
-            type="button"
-            onClick={() => {
-              setTab('login');
-              setError(null);
-            }}
-            className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-              tab === 'login' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Entrar
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setTab('register');
-              setError(null);
-            }}
-            className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-              tab === 'register' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Criar Conta
-          </button>
-        </div>
-
-        {error && (
-          <div className="mt-4 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-xs flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{error}</span>
+          {/* Password Input */}
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-violet-300/80 mb-1.5">
+              Senha
+            </label>
+            <div className="relative">
+              <Lock className="w-4 h-4 text-violet-400/60 absolute left-3.5 top-3.5" />
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full bg-[#0a0612] border border-violet-500/20 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-violet-500 transition select-text"
+              />
+            </div>
           </div>
-        )}
 
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-          {tab === 'register' && (
-            <>
-              {/* Avatar Preview */}
-              <div className="flex flex-col items-center">
-                <div
-                  className="w-16 h-16 rounded-full flex items-center justify-center text-2xl font-black text-white shadow-xl transition-all"
-                  style={{ backgroundColor: selectedColor }}
-                >
-                  {(name || '?').slice(0, 1).toUpperCase()}
-                </div>
-                <span className="text-[11px] text-slate-400 mt-1.5 font-medium">Cor do seu Avatar</span>
-              </div>
-
-              {/* Color Picker */}
-              <div className="flex items-center justify-center gap-2 pt-1 pb-2">
-                {COLOR_OPTIONS.map((color) => (
+          {/* Register-only fields: Avatar Color */}
+          {mode === 'register' && (
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-violet-300/80 mb-2">
+                Cor do seu Perfil
+              </label>
+              <div className="flex items-center justify-between gap-2 bg-[#0a0612] p-2.5 rounded-xl border border-violet-500/20">
+                {AVATAR_COLORS.map((color) => (
                   <button
                     key={color}
                     type="button"
                     onClick={() => setSelectedColor(color)}
-                    className={`w-6 h-6 rounded-full transition-transform cursor-pointer ${
-                      selectedColor === color ? 'scale-125 ring-2 ring-white ring-offset-2 ring-offset-[#161722]' : 'hover:scale-110'
+                    className={`w-7 h-7 rounded-full transition-transform cursor-pointer ${
+                      selectedColor === color ? 'scale-125 ring-2 ring-white shadow-lg' : 'opacity-70 hover:opacity-100'
                     }`}
                     style={{ backgroundColor: color }}
                   />
                 ))}
               </div>
-            </>
+            </div>
           )}
 
-          {/* Nome */}
-          <div className="space-y-1">
-            <div className="flex justify-between items-center">
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-300">
-                {tab === 'login' ? 'Nome ou Nome#hashtag' : 'Seu Nome'}
-              </label>
-              {tab === 'register' && (
-                <span className="text-[10px] text-indigo-400 font-mono">
-                  (sua # será gerada automaticamente)
-                </span>
-              )}
-            </div>
-            <div className="relative">
-              <User className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
-              <input
-                type="text"
-                autoFocus
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={tab === 'login' ? 'Ex: fulaninho ou fulaninho#001' : 'Ex: fulaninho'}
-                required
-                className="w-full bg-[#1b1c2a] border border-[#27293d] rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 outline-none focus:border-indigo-500 transition select-text"
-              />
-            </div>
-          </div>
-
-          {/* Password */}
-          <div className="space-y-1">
-            <label className="text-[11px] font-bold uppercase tracking-wider text-slate-300">
-              Senha
-            </label>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                required
-                className="w-full bg-[#1b1c2a] border border-[#27293d] rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 outline-none focus:border-indigo-500 transition select-text"
-              />
-            </div>
-          </div>
-
-          {/* Submit Button */}
           <button
             type="submit"
             disabled={loading}
-            className="w-full mt-2 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 transition-all cursor-pointer"
+            className="w-full py-3.5 px-4 bg-gradient-to-r from-violet-600 via-purple-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 disabled:opacity-50 text-white font-bold rounded-xl shadow-lg shadow-violet-600/30 transition flex items-center justify-center gap-2 text-sm cursor-pointer mt-2"
           >
-            <span>{loading ? 'Aguarde...' : tab === 'login' ? 'Entrar no Janjacord' : 'Criar minha Conta'}</span>
-            <ArrowRight className="w-4 h-4" />
+            <Sparkles className="w-4 h-4" />
+            <span>
+              {loading
+                ? 'Conectando...'
+                : mode === 'login'
+                ? 'Entrar no Janjacord'
+                : 'Criar Minha Conta'}
+            </span>
           </button>
+
+          {/* Desktop App Download Banner (Visible on Web Browser) */}
+          {!isElectron && (
+            <div className="pt-3 border-t border-violet-500/15">
+              <a
+                href={downloadUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full py-3 px-4 bg-[#19102c] hover:bg-[#22163b] border border-violet-500/30 rounded-xl flex items-center justify-between group transition cursor-pointer"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-violet-500/15 border border-violet-500/30 flex items-center justify-center text-violet-400 group-hover:scale-105 transition-transform">
+                    <Monitor className="w-4 h-4" />
+                  </div>
+                  <div className="text-left">
+                    <div className="text-xs font-extrabold text-white flex items-center gap-1.5">
+                      <span>Baixar App para Windows</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 font-mono">
+                        .EXE
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-violet-300/60">
+                      Transmissão de tela e jogos com áudio nativo
+                    </div>
+                  </div>
+                </div>
+                <Download className="w-4 h-4 text-violet-400 group-hover:translate-y-0.5 transition-transform" />
+              </a>
+            </div>
+          )}
         </form>
       </div>
     </div>

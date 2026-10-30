@@ -33,7 +33,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     scrollToBottom();
   }, [channelMessages]);
 
-  // Handle Ctrl+V paste of screenshots
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
       const items = e.clipboardData?.items;
@@ -54,10 +53,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   }, []);
 
   const processFile = (file: File) => {
-    if (file.size > 8 * 1024 * 1024) {
-      alert('O arquivo deve ter no máximo 8MB.');
-      return;
-    }
+    if (file.size > 8 * 1024 * 1024) return;
 
     const isImage = file.type.startsWith('image/');
     const reader = new FileReader();
@@ -105,32 +101,37 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   return (
-    <div className="flex-1 bg-[#14151f] flex flex-col justify-between overflow-hidden relative">
+    <div className="flex-1 bg-transparent flex flex-col justify-between overflow-hidden relative">
       {/* Channel Header */}
-      <div className="h-12 px-6 border-b border-[#212330] flex items-center justify-between bg-[#161722] shadow-sm z-10">
-        <div className="flex items-center gap-2">
-          <Hash className="w-5 h-5 text-slate-400" />
-          <span className="font-bold text-slate-200">{channel.name}</span>
-          <div className="w-[1px] h-4 bg-[#2a2c3d] mx-2" />
-          <span className="text-xs text-slate-400">Canal de bate-papo em tempo real</span>
+      <div className="h-14 px-6 border-b border-violet-500/15 flex items-center justify-between bg-[#120b22]/80 backdrop-blur-md z-10">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-violet-500/15 border border-violet-500/25 flex items-center justify-center text-violet-400">
+            <Hash className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="font-extrabold text-slate-100 text-sm">{channel.name}</div>
+            <div className="text-[11px] text-violet-300/60">Canal de bate-papo em tempo real</div>
+          </div>
         </div>
       </div>
 
       {/* Message Feed */}
       <div className="flex-1 p-6 overflow-y-auto space-y-4">
         {channelMessages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-slate-500 space-y-2">
-            <div className="w-16 h-16 rounded-full bg-[#1b1c28] flex items-center justify-center text-slate-400">
+          <div className="h-full flex flex-col items-center justify-center text-slate-500 space-y-3">
+            <div className="w-16 h-16 rounded-3xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center text-violet-400 shadow-lg">
               <Hash className="w-8 h-8" />
             </div>
-            <div className="text-lg font-bold text-slate-300">Bem-vindo a #{channel.name}!</div>
-            <div className="text-sm">Esse é o início do canal #{channel.name}. Mande uma mensagem!</div>
+            <div className="text-lg font-extrabold text-slate-200">Bem-vindo a #{channel.name}!</div>
+            <div className="text-xs text-violet-300/60">
+              Esse é o início do canal #{channel.name}. Mande uma mensagem!
+            </div>
           </div>
         ) : (
           channelMessages.map((msg) => {
             const isMe = msg.userId === currentUser?.id;
-
             const isSystem = msg.userId === 'system';
+
             const handleUserClick = () => {
               if (!isSystem && onSelectUser) {
                 onSelectUser({
@@ -143,19 +144,26 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             };
 
             return (
-              <div key={msg.id} className="flex items-start gap-3 group hover:bg-[#181926]/40 -mx-4 px-4 py-1.5 rounded-lg transition">
+              <div
+                key={msg.id}
+                className="flex items-start gap-3.5 group hover:bg-violet-500/5 -mx-3 px-3 py-2 rounded-2xl transition"
+              >
                 {msg.avatarUrl ? (
                   <img
                     src={msg.avatarUrl}
                     alt={msg.userName}
                     onClick={handleUserClick}
-                    className={`w-10 h-10 rounded-full object-cover shrink-0 shadow-md ${!isSystem ? 'cursor-pointer hover:opacity-90' : ''}`}
+                    className={`w-10 h-10 rounded-full object-cover shrink-0 shadow-md ${
+                      !isSystem ? 'cursor-pointer hover:opacity-90' : ''
+                    }`}
                   />
                 ) : (
                   <div
                     onClick={handleUserClick}
-                    className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0 shadow-md ${!isSystem ? 'cursor-pointer hover:opacity-90' : ''}`}
-                    style={{ backgroundColor: msg.avatarColor || '#6366f1' }}
+                    className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0 shadow-md ${
+                      !isSystem ? 'cursor-pointer hover:opacity-90' : ''
+                    }`}
+                    style={{ backgroundColor: msg.avatarColor || '#8b5cf6' }}
                   >
                     {msg.userName.slice(0, 1).toUpperCase()}
                   </div>
@@ -165,21 +173,21 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   <div className="flex items-baseline gap-2">
                     <span
                       onClick={handleUserClick}
-                      className={`text-sm font-semibold truncate ${!isSystem ? 'cursor-pointer hover:underline' : ''} ${isMe ? 'text-indigo-400' : 'text-slate-200'}`}
+                      className={`text-sm font-bold truncate ${
+                        !isSystem ? 'cursor-pointer hover:underline' : ''
+                      } ${isMe ? 'text-violet-400' : 'text-slate-100'}`}
                     >
                       {msg.userName}
                     </span>
-                    <span className="text-[11px] text-slate-400 font-mono">{msg.timestamp}</span>
+                    <span className="text-[10px] text-violet-300/50 font-mono">{msg.timestamp}</span>
                   </div>
 
-                  {/* Text */}
                   {msg.text && (
-                    <div className="text-slate-300 text-sm mt-0.5 break-words select-text">
+                    <div className="text-slate-200/90 text-sm mt-0.5 break-words select-text leading-relaxed">
                       {msg.text}
                     </div>
                   )}
 
-                  {/* Attachment */}
                   {msg.attachment && (
                     <div className="mt-2">
                       {msg.attachment.type === 'image' ? (
@@ -187,25 +195,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                           src={msg.attachment.url}
                           alt={msg.attachment.name}
                           onClick={() => setSelectedImageModal(msg.attachment!.url)}
-                          className="max-h-72 max-w-sm rounded-xl object-contain border border-[#27293d] cursor-pointer hover:opacity-95 transition shadow-lg"
+                          className="max-h-72 max-w-sm rounded-2xl object-contain border border-violet-500/25 cursor-pointer hover:opacity-95 transition shadow-lg"
                         />
                       ) : (
-                        <div className="flex items-center gap-3 bg-[#1b1c28] border border-[#27293b] rounded-xl p-3 max-w-sm shadow-md">
-                          <div className="w-10 h-10 rounded-lg bg-indigo-600/20 text-indigo-400 flex items-center justify-center shrink-0">
+                        <div className="flex items-center gap-3 bg-[#170f2b] border border-violet-500/25 rounded-2xl p-3 max-w-sm shadow-md">
+                          <div className="w-10 h-10 rounded-xl bg-violet-600/20 text-violet-400 flex items-center justify-center shrink-0">
                             <FileText className="w-5 h-5" />
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="text-xs font-semibold text-slate-200 truncate">
                               {msg.attachment.name}
                             </div>
-                            <div className="text-[10px] text-slate-400">
+                            <div className="text-[10px] text-violet-300/60">
                               {formatFileSize(msg.attachment.size)}
                             </div>
                           </div>
                           <a
                             href={msg.attachment.url}
                             download={msg.attachment.name}
-                            className="p-2 bg-[#27293a] hover:bg-indigo-600 text-slate-300 hover:text-white rounded-lg transition"
+                            className="p-2 bg-violet-600/20 hover:bg-violet-600 text-violet-300 hover:text-white rounded-xl transition"
                             title="Baixar arquivo"
                           >
                             <Download className="w-4 h-4" />
@@ -223,7 +231,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       </div>
 
       {/* Input Box */}
-      <div className="px-6 pb-6 pt-2">
+      <div className="px-6 pb-5 pt-2">
         <input
           ref={fileInputRef}
           type="file"
@@ -231,29 +239,28 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           className="hidden"
         />
 
-        {/* Attachment preview banner */}
         {pendingAttachment && (
-          <div className="mb-2 bg-[#1b1c28] border border-indigo-500/40 rounded-xl p-2.5 flex items-center justify-between gap-3 shadow-lg max-w-md">
+          <div className="mb-2 bg-[#170f2b] border border-violet-500/40 rounded-2xl p-2.5 flex items-center justify-between gap-3 shadow-lg max-w-md">
             <div className="flex items-center gap-2.5 truncate">
               {pendingAttachment.type === 'image' ? (
                 <img
                   src={pendingAttachment.url}
                   alt="Prévia"
-                  className="w-10 h-10 rounded-lg object-cover border border-white/10"
+                  className="w-10 h-10 rounded-xl object-cover border border-white/10"
                 />
               ) : (
-                <div className="w-10 h-10 rounded-lg bg-indigo-600/20 text-indigo-400 flex items-center justify-center">
+                <div className="w-10 h-10 rounded-xl bg-violet-600/20 text-violet-400 flex items-center justify-center">
                   <FileText className="w-5 h-5" />
                 </div>
               )}
               <div className="truncate">
                 <div className="text-xs font-bold text-slate-200 truncate">{pendingAttachment.name}</div>
-                <div className="text-[10px] text-slate-400">{formatFileSize(pendingAttachment.size)}</div>
+                <div className="text-[10px] text-violet-300/60">{formatFileSize(pendingAttachment.size)}</div>
               </div>
             </div>
             <button
               onClick={() => setPendingAttachment(null)}
-              className="p-1 text-slate-400 hover:text-rose-400 rounded-lg transition"
+              className="p-1 text-slate-400 hover:text-rose-400 rounded-lg transition cursor-pointer"
               title="Cancelar anexo"
             >
               <X className="w-4 h-4" />
@@ -263,12 +270,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
         <form
           onSubmit={handleSubmit}
-          className="bg-[#1b1c28] border border-[#27293b] rounded-xl px-4 py-2.5 flex items-center gap-3 shadow-lg focus-within:border-indigo-500 transition-colors"
+          className="bg-[#160f29] border border-violet-500/25 rounded-2xl px-4 py-3 flex items-center gap-3 shadow-xl focus-within:border-violet-400 transition-colors"
         >
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="text-slate-400 hover:text-indigo-400 transition cursor-pointer"
+            className="text-violet-300/70 hover:text-violet-300 transition cursor-pointer"
             title="Anexar arquivo ou imagem"
           >
             <Paperclip className="w-5 h-5" />
@@ -280,12 +287,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={`Conversar em #${channel.name}... (cole fotos com Ctrl+V)`}
-            className="flex-1 bg-transparent text-sm text-slate-100 placeholder-slate-400 outline-none select-text"
+            className="flex-1 bg-transparent text-sm text-slate-100 placeholder-violet-300/40 outline-none select-text"
           />
 
           <button
             type="button"
-            className="text-slate-400 hover:text-amber-400 transition"
+            className="text-violet-300/70 hover:text-fuchsia-400 transition cursor-pointer"
             title="Emojis"
           >
             <Smile className="w-5 h-5" />
@@ -294,7 +301,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <button
             type="submit"
             disabled={!inputText.trim() && !pendingAttachment}
-            className="p-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white rounded-lg transition shadow-md cursor-pointer"
+            className="p-2 bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 disabled:opacity-40 text-white rounded-xl transition shadow-md shadow-violet-600/25 cursor-pointer"
           >
             <Send className="w-4 h-4" />
           </button>
@@ -310,7 +317,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <img
             src={selectedImageModal}
             alt="Imagem ampliada"
-            className="max-h-[90vh] max-w-[90vw] object-contain rounded-xl shadow-2xl"
+            className="max-h-[90vh] max-w-[90vw] object-contain rounded-2xl shadow-2xl"
           />
         </div>
       )}

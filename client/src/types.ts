@@ -1,5 +1,25 @@
 export type StreamQualityPreset = 'potato' | 'balanced' | 'gamer';
 
+export interface DesktopSource {
+  id: string;
+  name: string;
+  display_id: string;
+  isScreen: boolean;
+  thumbnail: string;
+  appIcon: string | null;
+}
+
+declare global {
+  interface Window {
+    electronAPI?: {
+      isElectron: boolean;
+      getDesktopSources: () => Promise<DesktopSource[]>;
+      selectDesktopSource: (options: { sourceId: string; shareAudio: boolean }) => Promise<{ success: boolean }>;
+      openExternal: (url: string) => Promise<void>;
+    };
+  }
+}
+
 export interface User {
   id: string;
   name: string;

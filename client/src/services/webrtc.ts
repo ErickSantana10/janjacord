@@ -1,201 +1,360 @@
 import { Socket } from 'socket.io-client';
-import { QUALITY_PRESETS } from '../types';
-import type { StreamQualityPreset } from '../types';
-
-const ICE_SERVERS: RTCConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-  ],
-};
+import { QUALITY_PRESETS, type StreamQualityPreset } from '../types';
 
 export class WebRTCManager {
   private socket: Socket;
-  private localAudioStream: MediaStream | null = null;
-  private localScreenStream: MediaStream | null = null;
-  private peerConnections = new Map<string, RTCPeerConnection>();
-  private audioAnalyser: AnalyserNode | null = null;
-  private audioContext: AudioContext | null = null;
-  private checkSpeakingInterval: number | null = null;
+  private peerConnections: Map<string, RTCPeerConnection> = new Map();
+  private makingOffer: Map<string, boolean> = new Map();
+  private localStream: MediaStream | null = null;
+  private screenStream: MediaStream | null = null;
 
-  public onRemoteStream?: (peerId: string, stream: MediaStream, isScreen: boolean) => void;
-  public onPeerDisconnected?: (peerId: string) => void;
+  private audioContext: AudioContext | null = null;
+  private analyser: AnalyserNode | null = null;
+  private speakingInterval: number | null = null;
+
   public onSpeakingChange?: (isSpeaking: boolean) => void;
+  public onRemoteStream?: (peerId: string, stream: MediaStream, isScreen: boolean) => void;
+  public onRemoteScreenRemoved?: (peerId: string) => void;
+  public onPeerDisconnected?: (peerId: string) => void;
   public onScreenShareEnded?: () => void;
+
+  private rtcConfig: RTCConfiguration = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+    ],
+  };
 
   constructor(socket: Socket) {
     this.socket = socket;
-    this.setupSocketListeners();
+    this.setupSignaling();
   }
 
-  private setupSocketListeners() {
-    this.socket.on('webrtc:offer', async ({ fromPeerId, offer }) => {
-      console.log('[WebRTC] Recebido offer de:', fromPeerId);
-      const pc = this.getOrCreatePeerConnection(fromPeerId);
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      this.socket.emit('webrtc:answer', { toPeerId: fromPeerId, answer });
-    });
+  private setupSignaling() {
+    this.socket.on('webrtc:offer', async ({ fromSocketId, offer }) => {
+      try {
+        const pc = this.getOrCreatePeerConnection(fromSocketId);
+        const isPolite = (this.socket.id || '') < fromSocketId;
+        const offerCollision = this.makingOffer.get(fromSocketId) || pc.signalingState !== 'stable';
 
-    this.socket.on('webrtc:answer', async ({ fromPeerId, answer }) => {
-      console.log('[WebRTC] Recebido answer de:', fromPeerId);
-      const pc = this.peerConnections.get(fromPeerId);
-      if (pc) {
-        await pc.setRemoteDescription(new RTCSessionDescription(answer));
-      }
-    });
-
-    this.socket.on('webrtc:ice-candidate', async ({ fromPeerId, candidate }) => {
-      const pc = this.peerConnections.get(fromPeerId);
-      if (pc && candidate) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (err) {
-          console.error('[WebRTC] Erro ao adicionar ICE candidate:', err);
+        if (offerCollision) {
+          if (!isPolite) {
+            return;
+          }
+          await Promise.all([
+            pc.setLocalDescription({ type: 'rollback' }),
+            pc.setRemoteDescription(new RTCSessionDescription(offer)),
+          ]);
+        } else {
+          await pc.setRemoteDescription(new RTCSessionDescription(offer));
         }
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        this.socket.emit('webrtc:answer', {
+          targetSocketId: fromSocketId,
+          answer,
+        });
+      } catch (err) {
+        console.warn('[WebRTC] Erro ao processar offer:', err);
       }
     });
 
-    this.socket.on('voice:peer-left', ({ peerId }: { peerId: string }) => {
-      this.closePeerConnection(peerId);
-      if (this.onPeerDisconnected) {
-        this.onPeerDisconnected(peerId);
+    this.socket.on('webrtc:answer', async ({ fromSocketId, answer }) => {
+      try {
+        const pc = this.peerConnections.get(fromSocketId);
+        if (pc && pc.signalingState === 'have-local-offer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        }
+      } catch (err) {
+        console.warn('[WebRTC] Erro ao processar answer:', err);
       }
     });
+
+    this.socket.on('webrtc:ice-candidate', async ({ fromSocketId, candidate }) => {
+      try {
+        const pc = this.peerConnections.get(fromSocketId);
+        if (pc && candidate) {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+      } catch (err) {
+        // Ignora candidatos ICE obsoletos durante renegociação
+      }
+    });
+
+    this.socket.on('voice:peer-left', ({ socketId }) => {
+      this.closePeerConnection(socketId);
+      this.onPeerDisconnected?.(socketId);
+    });
+  }
+
+  public async connectToPeer(targetSocketId: string) {
+    const pc = this.getOrCreatePeerConnection(targetSocketId);
+    await this.renegotiate(targetSocketId, pc);
+  }
+
+  private getOrCreatePeerConnection(peerId: string): RTCPeerConnection {
+    if (this.peerConnections.has(peerId)) {
+      return this.peerConnections.get(peerId)!;
+    }
+
+    const pc = new RTCPeerConnection(this.rtcConfig);
+    this.peerConnections.set(peerId, pc);
+
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((track) => {
+        pc.addTrack(track, this.localStream!);
+      });
+    }
+
+    if (this.screenStream) {
+      this.screenStream.getTracks().forEach((track) => {
+        pc.addTrack(track, this.screenStream!);
+      });
+    }
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        this.socket.emit('webrtc:ice-candidate', {
+          targetSocketId: peerId,
+          candidate: event.candidate,
+        });
+      }
+    };
+
+    pc.ontrack = (event) => {
+      const remoteStream = event.streams[0] || new MediaStream([event.track]);
+      const isScreen = event.track.kind === 'video' || remoteStream.getVideoTracks().length > 0;
+      this.onRemoteStream?.(peerId, remoteStream, isScreen);
+
+      if (event.track.kind === 'video') {
+        event.track.onended = () => {
+          this.onRemoteScreenRemoved?.(peerId);
+        };
+        event.track.onmute = () => {
+          // Alguns navegadores emitem mute ao remover a track na renegociação
+          if (remoteStream.getVideoTracks().every((t) => t.readyState === 'ended' || t.muted)) {
+            setTimeout(() => {
+              if (remoteStream.getVideoTracks().every((t) => t.readyState === 'ended' || t.muted)) {
+                this.onRemoteScreenRemoved?.(peerId);
+              }
+            }, 600);
+          }
+        };
+      }
+
+      remoteStream.onaddtrack = (e) => {
+        const nowHasVideo = e.track.kind === 'video' || remoteStream.getVideoTracks().length > 0;
+        this.onRemoteStream?.(peerId, remoteStream, nowHasVideo);
+      };
+
+      remoteStream.onremovetrack = (e) => {
+        if (e.track.kind === 'video' && remoteStream.getVideoTracks().length === 0) {
+          this.onRemoteScreenRemoved?.(peerId);
+        }
+      };
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+        this.closePeerConnection(peerId);
+        this.onPeerDisconnected?.(peerId);
+      }
+    };
+
+    return pc;
   }
 
   public async startMicrophone(): Promise<MediaStream> {
-    if (this.localAudioStream) return this.localAudioStream;
+    if (this.localStream) return this.localStream;
 
+    this.localStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+        sampleRate: 48000,
+      },
+      video: false,
+    });
+
+    this.setupVoiceActivityDetection(this.localStream);
+
+    for (const [peerId, pc] of this.peerConnections.entries()) {
+      this.localStream.getTracks().forEach((track) => {
+        const alreadyAdded = pc.getSenders().some((s) => s.track === track);
+        if (!alreadyAdded) {
+          pc.addTrack(track, this.localStream!);
+        }
+      });
+      await this.renegotiate(peerId, pc);
+    }
+
+    return this.localStream;
+  }
+
+  private setupVoiceActivityDetection(stream: MediaStream) {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-        video: false,
-      });
+      this.audioContext = new AudioContext();
+      const source = this.audioContext.createMediaStreamSource(stream);
+      this.analyser = this.audioContext.createAnalyser();
+      this.analyser.fftSize = 256;
+      source.connect(this.analyser);
 
-      this.localAudioStream = stream;
-      this.setupSpeakingDetection(stream);
+      const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+      let lastState = false;
 
-      // Add audio track to any existing peer connections
-      const audioTrack = stream.getAudioTracks()[0];
-      this.peerConnections.forEach((pc) => {
-        pc.addTrack(audioTrack, stream);
-      });
+      this.speakingInterval = window.setInterval(() => {
+        if (!this.analyser) return;
+        this.analyser.getByteFrequencyData(dataArray);
+        const sum = dataArray.reduce((a, b) => a + b, 0);
+        const average = sum / dataArray.length;
 
-      return stream;
-    } catch (err) {
-      console.error('[WebRTC] Falha ao acessar microfone:', err);
-      throw err;
+        const isSpeaking = average > 18;
+        if (isSpeaking !== lastState) {
+          lastState = isSpeaking;
+          this.onSpeakingChange?.(isSpeaking);
+        }
+      }, 100);
+    } catch (e) {
+      console.warn('Falha ao iniciar detector de voz:', e);
     }
   }
 
   public setMicrophoneMuted(muted: boolean) {
-    if (this.localAudioStream) {
-      this.localAudioStream.getAudioTracks().forEach((track) => {
+    if (this.localStream) {
+      this.localStream.getAudioTracks().forEach((track) => {
         track.enabled = !muted;
       });
     }
   }
 
-  private setupSpeakingDetection(stream: MediaStream) {
-    try {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      this.audioContext = new AudioCtx();
-      const source = this.audioContext.createMediaStreamSource(stream);
-      this.audioAnalyser = this.audioContext.createAnalyser();
-      this.audioAnalyser.fftSize = 256;
-      source.connect(this.audioAnalyser);
-
-      const buffer = new Uint8Array(this.audioAnalyser.frequencyBinCount);
-      let wasSpeaking = false;
-
-      this.checkSpeakingInterval = window.setInterval(() => {
-        if (!this.audioAnalyser || !this.localAudioStream?.getAudioTracks()[0]?.enabled) {
-          if (wasSpeaking) {
-            wasSpeaking = false;
-            this.onSpeakingChange?.(false);
-          }
-          return;
-        }
-
-        this.audioAnalyser.getByteFrequencyData(buffer);
-        let sum = 0;
-        for (let i = 0; i < buffer.length; i++) {
-          sum += buffer[i];
-        }
-        const average = sum / buffer.length;
-        const isSpeaking = average > 25; // Sensibilidade de fala
-
-        if (isSpeaking !== wasSpeaking) {
-          wasSpeaking = isSpeaking;
-          this.onSpeakingChange?.(isSpeaking);
-        }
-      }, 100);
-    } catch (e) {
-      console.warn('[WebRTC] Falha ao inicializar detecção de fala:', e);
-    }
-  }
-
-  public async startScreenShare(presetKey: StreamQualityPreset): Promise<MediaStream> {
+  /**
+   * Inicia o compartilhamento de tela (compatível tanto com Navegador Web quanto com App Desktop Electron)
+   */
+  public async startScreenShare(
+    presetKey: StreamQualityPreset,
+    sourceId?: string,
+    shareAudio: boolean = true
+  ): Promise<MediaStream> {
     const preset = QUALITY_PRESETS[presetKey];
 
-    try {
-      // Captura a tela com áudio limpo do sistema/aba
-      // Sem forçar restrições de echoCancellation que bloqueiam o som em navegadores como Chrome/Edge
-      const stream = await navigator.mediaDevices.getDisplayMedia({
+    // Se já houver uma transmissão ativa, encerra antes de iniciar a nova
+    if (this.screenStream) {
+      this.stopScreenShare();
+    }
+
+    let acquiredStream: MediaStream | null = null;
+
+    if (window.electronAPI?.isElectron) {
+      // 1. Informa ao processo principal do Electron qual tela/janela o usuário selecionou
+      if (sourceId) {
+        await window.electronAPI.selectDesktopSource({ sourceId, shareAudio });
+      }
+
+      // 2. Tenta capturar via getDisplayMedia (interceptado por setDisplayMediaRequestHandler no main.cjs)
+      try {
+        acquiredStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: shareAudio,
+        });
+      } catch (err1) {
+        console.warn('[WebRTC Electron] Tentativa 1 (vídeo + áudio loopback) falhou, tentando somente vídeo:', err1);
+        try {
+          await window.electronAPI.selectDesktopSource({ sourceId: sourceId || '', shareAudio: false });
+          acquiredStream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: false,
+          });
+        } catch (err2) {
+          console.warn('[WebRTC Electron] Tentativa 2 falhou, usando chromeMediaSource desktop:', err2);
+          if (sourceId) {
+            acquiredStream = await navigator.mediaDevices.getUserMedia({
+              audio: false,
+              video: {
+                mandatory: {
+                  chromeMediaSource: 'desktop',
+                  chromeMediaSourceId: sourceId,
+                  maxWidth: preset.width,
+                  maxHeight: preset.height,
+                  maxFrameRate: preset.fps,
+                },
+              } as any,
+            });
+          } else {
+            throw err2;
+          }
+        }
+      }
+    } else {
+      // Fluxo padrão do Navegador Web
+      acquiredStream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           width: { ideal: preset.width, max: preset.width },
           height: { ideal: preset.height, max: preset.height },
           frameRate: { ideal: preset.fps, max: preset.fps },
         },
-        audio: true,
+        audio: shareAudio
+          ? {
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+            }
+          : false,
       });
+    }
 
-      this.localScreenStream = stream;
+    if (!acquiredStream) {
+      throw new Error('Não foi possível obter a transmissão de tela.');
+    }
 
-      const videoTrack = stream.getVideoTracks()[0];
-      const audioTrack = stream.getAudioTracks()[0];
+    this.screenStream = acquiredStream;
 
-      if (audioTrack) {
-        console.log('[WebRTC] Áudio da tela detectado e ativado:', audioTrack.label);
-      } else {
-        console.warn('[WebRTC] O usuário não marcou a opção "Compartilhar áudio" no modal do navegador.');
+    const videoTrack = this.screenStream.getVideoTracks()[0];
+    if (videoTrack) {
+      if ('contentHint' in videoTrack) {
+        videoTrack.contentHint = 'motion';
       }
 
-      // Auto stop handling when user clicks "Stop sharing" on browser native bar
+      // Aplica limites de resolução e FPS de forma segura sem derrubar a stream
+      try {
+        await videoTrack.applyConstraints({
+          width: { ideal: preset.width, max: preset.width },
+          height: { ideal: preset.height, max: preset.height },
+          frameRate: { ideal: preset.fps, max: preset.fps },
+        });
+      } catch (constraintErr) {
+        console.warn('[WebRTC] Aviso ao aplicar constraints na captura:', constraintErr);
+      }
+
       videoTrack.onended = () => {
         this.stopScreenShare();
+        this.onScreenShareEnded?.();
       };
-
-      // Add tracks to all peer connections and apply bitrate limit
-      this.peerConnections.forEach((pc) => {
-        const videoSender = pc.addTrack(videoTrack, stream);
-        this.applyBitrateConstraint(videoSender, preset.bitrateKbps);
-
-        if (audioTrack) {
-          pc.addTrack(audioTrack, stream);
-        }
-        this.renegotiate(pc);
-      });
-
-      return stream;
-    } catch (err) {
-      console.error('[WebRTC] Falha ao iniciar compartilhamento:', err);
-      throw err;
     }
+
+    // Anexa as tracks de vídeo (e áudio do sistema, se presente) a todos os peers conectados
+    for (const [peerId, pc] of this.peerConnections.entries()) {
+      for (const track of this.screenStream.getTracks()) {
+        const sender = pc.addTrack(track, this.screenStream);
+        if (track.kind === 'video') {
+          await this.applyBitrateLimit(sender, preset.bitrateKbps, preset.fps);
+        }
+      }
+      await this.renegotiate(peerId, pc);
+    }
+
+    return this.screenStream;
   }
 
   public async updateScreenQuality(presetKey: StreamQualityPreset) {
-    if (!this.localScreenStream) return;
+    if (!this.screenStream) return;
     const preset = QUALITY_PRESETS[presetKey];
 
-    const videoTrack = this.localScreenStream.getVideoTracks()[0];
+    const videoTrack = this.screenStream.getVideoTracks()[0];
     if (videoTrack) {
       try {
         await videoTrack.applyConstraints({
@@ -203,155 +362,108 @@ export class WebRTCManager {
           height: { ideal: preset.height, max: preset.height },
           frameRate: { ideal: preset.fps, max: preset.fps },
         });
-      } catch (err) {
-        console.warn('[WebRTC] Constraints não suportadas pelo navegador:', err);
+      } catch (e) {
+        console.warn('[WebRTC] Aviso ao atualizar qualidade:', e);
       }
     }
 
-    // Update bitrate on senders
-    this.peerConnections.forEach((pc) => {
+    for (const pc of this.peerConnections.values()) {
       const senders = pc.getSenders();
-      const videoSender = senders.find((s) => s.track?.kind === 'video');
-      if (videoSender) {
-        this.applyBitrateConstraint(videoSender, preset.bitrateKbps);
+      for (const sender of senders) {
+        if (sender.track && sender.track.kind === 'video') {
+          await this.applyBitrateLimit(sender, preset.bitrateKbps, preset.fps);
+        }
       }
-    });
+    }
   }
 
-  private async applyBitrateConstraint(sender: RTCRtpSender, maxBitrateKbps: number) {
+  private async applyBitrateLimit(sender: RTCRtpSender, maxBitrateKbps: number, maxFps: number) {
     try {
       const params = sender.getParameters();
       if (!params.encodings || params.encodings.length === 0) {
         params.encodings = [{}];
       }
       params.encodings[0].maxBitrate = maxBitrateKbps * 1000;
+      params.encodings[0].maxFramerate = maxFps;
+      params.degradationPreference = 'maintain-framerate';
       await sender.setParameters(params);
-      console.log(`[WebRTC] Bitrate limitado para ${maxBitrateKbps} Kbps`);
-    } catch (err) {
-      console.warn('[WebRTC] Falha ao limitar bitrate:', err);
+    } catch (e) {
+      console.warn('Aviso ao configurar bitrate WebRTC:', e);
     }
   }
 
   public stopScreenShare() {
-    if (this.localScreenStream) {
-      this.localScreenStream.getTracks().forEach((track) => track.stop());
-      this.localScreenStream = null;
+    if (!this.screenStream) return;
 
-      // Remove video tracks from peer connections
-      this.peerConnections.forEach((pc) => {
-        const senders = pc.getSenders();
-        senders.forEach((sender) => {
-          if (sender.track?.kind === 'video') {
+    const screenTracks = new Set(this.screenStream.getTracks());
+    this.screenStream.getTracks().forEach((track) => {
+      track.onended = null;
+      track.stop();
+    });
+
+    for (const [peerId, pc] of this.peerConnections.entries()) {
+      const senders = pc.getSenders();
+      senders.forEach((sender) => {
+        if (sender.track && (screenTracks.has(sender.track) || sender.track.kind === 'video')) {
+          try {
             pc.removeTrack(sender);
-          }
-        });
-        this.renegotiate(pc);
+          } catch {}
+        }
       });
-
-      this.onScreenShareEnded?.();
+      this.renegotiate(peerId, pc);
     }
+
+    this.screenStream = null;
   }
 
-  public connectToPeer(peerId: string) {
-    const pc = this.getOrCreatePeerConnection(peerId);
-    this.initiateOffer(peerId, pc);
-  }
+  private async renegotiate(peerId: string, pc?: RTCPeerConnection) {
+    const conn = pc || this.peerConnections.get(peerId);
+    if (!conn) return;
 
-  private async initiateOffer(peerId: string, pc: RTCPeerConnection) {
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    this.socket.emit('webrtc:offer', { toPeerId: peerId, offer });
-  }
-
-  private async renegotiate(pc: RTCPeerConnection) {
-    const peerId = this.findPeerIdByConnection(pc);
-    if (!peerId) return;
     try {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      this.socket.emit('webrtc:offer', { toPeerId: peerId, offer });
+      this.makingOffer.set(peerId, true);
+      const offer = await conn.createOffer();
+      if (conn.signalingState !== 'stable') return;
+      await conn.setLocalDescription(offer);
+      this.socket.emit('webrtc:offer', {
+        targetSocketId: peerId,
+        offer: conn.localDescription,
+      });
     } catch (e) {
-      console.error('[WebRTC] Erro na renegociação:', e);
+      console.error('Erro na renegociação WebRTC:', e);
+    } finally {
+      this.makingOffer.set(peerId, false);
     }
   }
 
-  private findPeerIdByConnection(pc: RTCPeerConnection): string | null {
-    for (const [id, conn] of this.peerConnections.entries()) {
-      if (conn === pc) return id;
-    }
-    return null;
-  }
-
-  private getOrCreatePeerConnection(peerId: string): RTCPeerConnection {
-    let pc = this.peerConnections.get(peerId);
-    if (pc) return pc;
-
-    pc = new RTCPeerConnection(ICE_SERVERS);
-    this.peerConnections.set(peerId, pc);
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        this.socket.emit('webrtc:ice-candidate', {
-          toPeerId: peerId,
-          candidate: event.candidate,
-        });
-      }
-    };
-
-    pc.ontrack = (event) => {
-      console.log(`[WebRTC] Track recebida de ${peerId}: kind=${event.track.kind}, streamId=${event.streams[0]?.id}`);
-      
-      // Se a track for de vídeo, ou pertencer a uma stream com vídeo (tela compartilhada com áudio)
-      const stream = event.streams[0] || new MediaStream([event.track]);
-      const hasVideo = stream.getVideoTracks().length > 0 || event.track.kind === 'video';
-      
-      this.onRemoteStream?.(peerId, stream, hasVideo);
-    };
-
-    // Attach local audio if active
-    if (this.localAudioStream) {
-      this.localAudioStream.getAudioTracks().forEach((track) => {
-        pc.addTrack(track, this.localAudioStream!);
-      });
-    }
-
-    // Attach local screen share if active
-    if (this.localScreenStream) {
-      this.localScreenStream.getTracks().forEach((track) => {
-        pc.addTrack(track, this.localScreenStream!);
-      });
-    }
-
-    return pc;
-  }
-
-  public closePeerConnection(peerId: string) {
+  private closePeerConnection(peerId: string) {
     const pc = this.peerConnections.get(peerId);
     if (pc) {
       pc.close();
       this.peerConnections.delete(peerId);
     }
+    this.makingOffer.delete(peerId);
   }
 
   public leaveAll() {
-    this.stopScreenShare();
-
-    if (this.localAudioStream) {
-      this.localAudioStream.getTracks().forEach((t) => t.stop());
-      this.localAudioStream = null;
+    if (this.speakingInterval) {
+      clearInterval(this.speakingInterval);
+      this.speakingInterval = null;
     }
-
-    if (this.checkSpeakingInterval) {
-      clearInterval(this.checkSpeakingInterval);
-      this.checkSpeakingInterval = null;
-    }
-
-    if (this.audioContext && this.audioContext.state !== 'closed') {
-      this.audioContext.close();
+    if (this.audioContext) {
+      this.audioContext.close().catch(() => {});
       this.audioContext = null;
     }
-
-    this.peerConnections.forEach((pc) => pc.close());
-    this.peerConnections.clear();
+    if (this.screenStream) {
+      this.screenStream.getTracks().forEach((t) => t.stop());
+      this.screenStream = null;
+    }
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((t) => t.stop());
+      this.localStream = null;
+    }
+    for (const peerId of this.peerConnections.keys()) {
+      this.closePeerConnection(peerId);
+    }
   }
 }

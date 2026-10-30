@@ -14,16 +14,47 @@ import { UserSettingsModal } from './components/UserSettingsModal';
 import { ServerSettingsModal } from './components/ServerSettingsModal';
 import { UserProfileCard } from './components/UserProfileCard';
 import { ServerMemberList } from './components/ServerMemberList';
+import { ScreenShareModal } from './components/ScreenShareModal';
 import { WebRTCManager } from './services/webrtc';
 import { sounds } from './services/soundEffects';
-import { Phone, PhoneOff } from 'lucide-react';
-import type { Channel, Message, DMMessage, User, ServerItem, FriendItem, OnlineUser, StreamQualityPreset, MessageAttachment, ServerMemberInfo, MediaRoomState } from './types';
+import {
+  Phone,
+  PhoneOff,
+  Plus,
+  Mic,
+  MicOff,
+  Headphones,
+  Settings,
+  LogOut,
+  Download,
+  Home,
+  Volume2,
+  X,
+  Check,
+  Monitor,
+} from 'lucide-react';
+import type {
+  Channel,
+  Message,
+  DMMessage,
+  User,
+  ServerItem,
+  FriendItem,
+  OnlineUser,
+  StreamQualityPreset,
+  MessageAttachment,
+  ServerMemberInfo,
+  MediaRoomState,
+} from './types';
 
 interface RemoteStreamItem {
   peerId: string;
   stream: MediaStream;
   isScreen: boolean;
 }
+
+const DESKTOP_APP_DOWNLOAD_URL =
+  'https://github.com/ErickSantana10/janjacord/releases/download/v1.0.0/Janjacord-Windows.exe';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -66,6 +97,8 @@ export const App: React.FC = () => {
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [isServerSettingsOpen, setIsServerSettingsOpen] = useState(false);
   const [selectedProfileUser, setSelectedProfileUser] = useState<User | ServerMemberInfo | null>(null);
+  const [isScreenPickerOpen, setIsScreenPickerOpen] = useState(false);
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
 
   // Media Room State (Watch together / Music DJ)
   const [mediaRoomState, setMediaRoomState] = useState<MediaRoomState | null>(null);
@@ -73,6 +106,8 @@ export const App: React.FC = () => {
   // Toast Notification customizada
   const [toast, setToast] = useState<{ text: string; type: 'error' | 'info' } | null>(null);
   const toastTimeoutRef = useRef<any>(null);
+
+  const isElectron = Boolean(window.electronAPI?.isElectron);
 
   const showToast = (text: string, type: 'error' | 'info' = 'error') => {
     setToast({ text, type });
@@ -91,7 +126,9 @@ export const App: React.FC = () => {
   }, [activeChannel]);
 
   useEffect(() => {
-    const serverUrl = import.meta.env.VITE_SERVER_URL || '';
+    const serverUrl =
+      import.meta.env.VITE_SERVER_URL ||
+      (window.location.hostname === 'localhost' ? 'http://localhost:3001' : 'https://janjacord.onrender.com');
     const socket = io(serverUrl);
     socketRef.current = socket;
 
@@ -103,13 +140,16 @@ export const App: React.FC = () => {
     };
 
     rtc.onRemoteStream = (peerId, stream, isScreen) => {
-      console.log(`[App] Nova stream de ${peerId}: screen=${isScreen}`);
       setRemoteStreams((prev) => {
         const filtered = prev.filter((item) => !(item.peerId === peerId && item.isScreen === isScreen));
         return [...filtered, { peerId, stream, isScreen }];
       });
       sounds.stopOutgoingRing();
       setCallingFriend(null);
+    };
+
+    rtc.onRemoteScreenRemoved = (peerId) => {
+      setRemoteStreams((prev) => prev.filter((item) => !(item.peerId === peerId && item.isScreen)));
     };
 
     rtc.onPeerDisconnected = (peerId) => {
@@ -122,7 +162,6 @@ export const App: React.FC = () => {
       socket.emit('user:update-state', { isScreenSharing: false });
     };
 
-    // Auto resume saved user session (e re-autentica automaticamente se o servidor reiniciar ou reconectar)
     const restoreSession = () => {
       const savedUserId = localStorage.getItem('janjacord_user_id');
       if (savedUserId) {
@@ -161,9 +200,16 @@ export const App: React.FC = () => {
     restoreSession();
     socket.on('connect', restoreSession);
 
-    // Real-time events
     socket.on('online:list', (list: OnlineUser[]) => {
       setOnlineUsers(list);
+      // Remove imediatamente transmissões de tela de quem parou de compartilhar
+      setRemoteStreams((prev) =>
+        prev.filter((item) => {
+          if (!item.isScreen) return true;
+          const peer = list.find((u) => u.socketId === item.peerId);
+          return peer ? peer.isScreenSharing : false;
+        })
+      );
     });
 
     socket.on('server:created', (newServer: ServerItem) => {
@@ -242,7 +288,6 @@ export const App: React.FC = () => {
       );
     });
 
-    // Incoming DM Call: Start ringtone
     socket.on('dm:incoming-call', ({ fromUser, channelId }: { fromUser: User; channelId: string }) => {
       setIncomingCall({ fromUser, channelId });
       sounds.startIncomingRingtone();
@@ -264,7 +309,6 @@ export const App: React.FC = () => {
       setCurrentUser(u);
     });
 
-    // Voice channel events
     socket.on('voice:room-users', async ({ channelId, peers }: { channelId: string; peers: any[] }) => {
       setCurrentVoiceChannelId(channelId);
       setVoiceViewMode('stage');
@@ -286,8 +330,7 @@ export const App: React.FC = () => {
       }
     });
 
-    socket.on('voice:peer-joined', ({ peer }: { peer: any }) => {
-      console.log(`[Voice] Peer entrou na sala: ${peer.name}`);
+    socket.on('voice:peer-joined', () => {
       sounds.stopOutgoingRing();
       setCallingFriend(null);
     });
@@ -362,7 +405,6 @@ export const App: React.FC = () => {
     handleLeaveVoice();
   };
 
-  // Profile Update
   const handleSaveProfile = (updates: { name: string; avatarColor: string; avatarUrl?: string }) => {
     socketRef.current?.emit('user:update-profile', updates, (res: { success: boolean; error?: string; user?: any }) => {
       if (res?.success && res.user) {
@@ -374,8 +416,13 @@ export const App: React.FC = () => {
     });
   };
 
-  // Navigation
   const currentServer = servers.find((s) => s.id === currentServerId) || null;
+
+  const getServerInitials = (name: string) => {
+    const parts = name.trim().split(' ');
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return name.slice(0, 2).toUpperCase();
+  };
 
   const handleSelectHome = () => {
     setCurrentServerId(null);
@@ -399,7 +446,7 @@ export const App: React.FC = () => {
 
   const handleSelectChannel = (channel: Channel) => {
     setActiveChannel(channel);
-    setVoiceViewMode('chat'); // browse text or media channel while staying in voice
+    setVoiceViewMode('chat');
     if (channel.type === 'media') {
       socketRef.current?.emit('media:get-state', { channelId: channel.id }, (res: any) => {
         if (res?.success && res.state) {
@@ -410,7 +457,7 @@ export const App: React.FC = () => {
   };
 
   const handleViewVoiceRoom = () => {
-    setVoiceViewMode('stage'); // show the stage / screen share
+    setVoiceViewMode('stage');
   };
 
   const handleCreateServer = (name: string, iconColor: string, callback?: (error?: string) => void) => {
@@ -494,7 +541,6 @@ export const App: React.FC = () => {
     });
   };
 
-  // Media Room Handlers (Watch Together & Music DJ)
   useEffect(() => {
     if (activeChannel?.type === 'media') {
       socketRef.current?.emit('media:join-room', { channelId: activeChannel.id });
@@ -579,7 +625,6 @@ export const App: React.FC = () => {
     });
   };
 
-  // Friend Handlers
   const handleSendFriendRequest = (
     targetIdentifier: string,
     callback: (res: { success: boolean; message?: string; error?: string }) => void
@@ -601,14 +646,12 @@ export const App: React.FC = () => {
     }
   };
 
-  // Direct Message Sending
   const handleSendDM = (text: string, attachment?: MessageAttachment) => {
     const recipientId = activeDMFriend ? activeDMFriend.id : dmVoiceTarget ? dmVoiceTarget.id : null;
     if (!recipientId) return;
     socketRef.current?.emit('dm:send', { toUserId: recipientId, text, attachment });
   };
 
-  // Server message sending
   const handleSendMessage = (text: string, attachment?: MessageAttachment) => {
     if (!currentServer || !activeChannel) return;
     socketRef.current?.emit('chat:send', {
@@ -619,7 +662,6 @@ export const App: React.FC = () => {
     });
   };
 
-  // DM Private Call with Ringing Sound
   const handleStartDMCall = (friend: FriendItem['friend']) => {
     if (!currentUser) return;
     const channelId = `dm-call-${[currentUser.id, friend.id].sort().join('-')}`;
@@ -662,7 +704,6 @@ export const App: React.FC = () => {
     setIncomingCall(null);
   };
 
-  // Voice Handlers
   const handleJoinVoice = (channelId: string, serverId: string) => {
     if (currentVoiceChannelId === channelId) {
       setVoiceViewMode('stage');
@@ -715,19 +756,47 @@ export const App: React.FC = () => {
       setLocalScreenStream(null);
       socketRef.current?.emit('user:update-state', { isScreenSharing: false });
     } else {
-      try {
-        const stream = await rtcManagerRef.current?.startScreenShare(streamQuality);
-        if (stream) {
-          setIsScreenSharing(true);
-          setLocalScreenStream(stream);
-          socketRef.current?.emit('user:update-state', {
-            isScreenSharing: true,
-            streamQuality,
-          });
+      if (window.electronAPI?.isElectron) {
+        // No app desktop Electron, abre o seletor customizado de Telas / Jogos com áudio nativo!
+        setIsScreenPickerOpen(true);
+      } else {
+        try {
+          const stream = await rtcManagerRef.current?.startScreenShare(streamQuality);
+          if (stream) {
+            setIsScreenSharing(true);
+            setLocalScreenStream(stream);
+            socketRef.current?.emit('user:update-state', {
+              isScreenSharing: true,
+              streamQuality,
+            });
+          }
+        } catch (e) {
+          console.warn('Compartilhamento cancelado:', e);
         }
-      } catch (e) {
-        console.warn('Compartilhamento cancelado:', e);
       }
+    }
+  };
+
+  const handleConfirmElectronScreenShare = async (
+    sourceId: string,
+    chosenQuality: StreamQualityPreset,
+    shareAudio: boolean
+  ) => {
+    setIsScreenPickerOpen(false);
+    setStreamQuality(chosenQuality);
+    try {
+      const stream = await rtcManagerRef.current?.startScreenShare(chosenQuality, sourceId, shareAudio);
+      if (stream) {
+        setIsScreenSharing(true);
+        setLocalScreenStream(stream);
+        socketRef.current?.emit('user:update-state', {
+          isScreenSharing: true,
+          streamQuality: chosenQuality,
+        });
+      }
+    } catch (e) {
+      console.error('Erro ao iniciar transmissão no Electron:', e);
+      showToast('Não foi possível iniciar a captura desta janela/tela.', 'error');
     }
   };
 
@@ -737,7 +806,6 @@ export const App: React.FC = () => {
     socketRef.current?.emit('user:update-state', { streamQuality: preset });
   };
 
-  // Find active voice channel or virtual DM channel
   let activeVoiceChannel: Channel | null = null;
   if (currentVoiceChannelId) {
     if (currentVoiceChannelId.startsWith('dm-call-')) {
@@ -759,18 +827,27 @@ export const App: React.FC = () => {
   }
 
   const usersInVoiceRoom = onlineUsers.filter((u) => u.currentVoiceChannel === currentVoiceChannelId);
+  const isAtHome = currentServer === null;
 
   return (
-    <div className="flex h-screen w-screen bg-[#0f1016] text-slate-100 overflow-hidden font-sans">
+    <div className="flex flex-col h-screen w-screen bg-gradient-to-br from-[#07040d] via-[#0c0717] to-[#130924] text-slate-100 overflow-hidden font-sans">
       {/* 1. Login/Register Modal */}
       {!isAuthenticated && (
-        <LoginModal onLogin={handleLogin} onRegister={handleRegister} />
+        <LoginModal
+          onLogin={handleLogin}
+          onRegister={handleRegister}
+          downloadUrl={DESKTOP_APP_DOWNLOAD_URL}
+        />
       )}
 
-      {/* Caixinha de Alerta / Notificação Flutuante Customizada */}
+      {/* Toast Notification Customizada */}
       {toast && (
-        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[100] bg-[#161722] border border-rose-500/40 rounded-2xl px-4 py-3 shadow-2xl shadow-black/60 flex items-center gap-3 animate-in fade-in duration-150 select-none">
-          <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse shrink-0" />
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[100] bg-[#160f29] border border-violet-500/40 rounded-2xl px-4 py-3 shadow-2xl shadow-black/70 flex items-center gap-3 animate-in fade-in duration-150 select-none">
+          <span
+            className={`w-2.5 h-2.5 rounded-full animate-pulse shrink-0 ${
+              toast.type === 'error' ? 'bg-rose-500' : 'bg-violet-400'
+            }`}
+          />
           <span className="text-xs font-bold text-white">{toast.text}</span>
           <button
             onClick={() => setToast(null)}
@@ -783,20 +860,20 @@ export const App: React.FC = () => {
 
       {/* 2. Outgoing Call Animated Overlay */}
       {callingFriend && (
-        <div className="fixed inset-0 z-50 bg-[#0c0d14]/90 backdrop-blur-md flex flex-col items-center justify-center p-6 space-y-8 select-none">
+        <div className="fixed inset-0 z-50 bg-[#080510]/90 backdrop-blur-md flex flex-col items-center justify-center p-6 space-y-8 select-none">
           <div className="relative flex items-center justify-center">
-            <div className="absolute w-44 h-44 rounded-full bg-emerald-500/20 animate-ping" />
-            <div className="absolute w-36 h-36 rounded-full bg-emerald-500/30 animate-pulse" />
+            <div className="absolute w-44 h-44 rounded-full bg-violet-500/20 animate-ping" />
+            <div className="absolute w-36 h-36 rounded-full bg-fuchsia-500/30 animate-pulse" />
 
             {callingFriend.avatarUrl ? (
               <img
                 src={callingFriend.avatarUrl}
                 alt={callingFriend.displayName}
-                className="w-28 h-28 rounded-full object-cover shadow-2xl relative border-4 border-emerald-500 z-10"
+                className="w-28 h-28 rounded-full object-cover shadow-2xl relative border-4 border-violet-500 z-10"
               />
             ) : (
               <div
-                className="w-28 h-28 rounded-full flex items-center justify-center font-black text-white text-4xl shadow-2xl relative border-4 border-emerald-500 z-10"
+                className="w-28 h-28 rounded-full flex items-center justify-center font-black text-white text-4xl shadow-2xl relative border-4 border-violet-500 z-10"
                 style={{ backgroundColor: callingFriend.avatarColor }}
               >
                 {callingFriend.displayName.slice(0, 1).toUpperCase()}
@@ -805,12 +882,12 @@ export const App: React.FC = () => {
           </div>
 
           <div className="text-center space-y-1.5 z-10">
-            <div className="text-xs uppercase tracking-widest text-emerald-400 font-bold flex items-center justify-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+            <div className="text-xs uppercase tracking-widest text-violet-300 font-bold flex items-center justify-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-violet-400 animate-ping" />
               Chamando...
             </div>
             <h3 className="text-2xl font-black text-white">{callingFriend.displayName}</h3>
-            <p className="text-xs text-slate-400 font-mono">@{callingFriend.username}</p>
+            <p className="text-xs text-violet-300/60 font-mono">#{callingFriend.tag || '001'}</p>
           </div>
 
           <button
@@ -825,7 +902,7 @@ export const App: React.FC = () => {
 
       {/* 3. Incoming Call Ringing Banner */}
       {incomingCall && (
-        <div className="fixed top-6 right-6 z-50 bg-[#161722] border-2 border-emerald-500 rounded-2xl p-4 shadow-2xl shadow-emerald-500/20 flex items-center gap-4 animate-bounce">
+        <div className="fixed top-6 right-6 z-50 bg-[#150d28] border-2 border-violet-500 rounded-3xl p-4 shadow-2xl shadow-violet-500/30 flex items-center gap-4 animate-bounce">
           <div className="relative">
             {incomingCall.fromUser.avatarUrl ? (
               <img
@@ -841,26 +918,26 @@ export const App: React.FC = () => {
                 {incomingCall.fromUser.displayName.slice(0, 1).toUpperCase()}
               </div>
             )}
-            <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full border-2 border-[#161722] flex items-center justify-center animate-ping" />
+            <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full border-2 border-[#150d28] flex items-center justify-center animate-ping" />
           </div>
 
           <div>
-            <div className="text-xs text-emerald-400 font-bold">Chamada recebida...</div>
+            <div className="text-xs text-violet-300 font-bold">Chamada recebida...</div>
             <div className="text-sm font-extrabold text-white">{incomingCall.fromUser.displayName}</div>
-            <div className="text-[11px] text-slate-400 font-mono">@{incomingCall.fromUser.username}</div>
+            <div className="text-[11px] text-violet-300/60 font-mono">#{incomingCall.fromUser.tag || '001'}</div>
           </div>
 
           <div className="flex items-center gap-2 ml-2">
             <button
               onClick={handleAnswerCall}
-              className="p-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-lg transition cursor-pointer"
+              className="p-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl shadow-lg transition cursor-pointer"
               title="Atender Chamada"
             >
               <Phone className="w-5 h-5" />
             </button>
             <button
               onClick={handleDeclineCall}
-              className="p-3 bg-rose-600 hover:bg-rose-500 text-white rounded-xl shadow-lg transition cursor-pointer"
+              className="p-3 bg-rose-600 hover:bg-rose-500 text-white rounded-2xl shadow-lg transition cursor-pointer"
               title="Recusar"
             >
               <PhoneOff className="w-5 h-5" />
@@ -869,134 +946,390 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* 4. Left Sidebar with Connected Voice Members Indented */}
-      <Sidebar
-        currentUser={currentUser}
-        servers={servers}
-        currentServer={currentServer}
-        activeChannel={activeChannel}
-        currentVoiceChannelId={currentVoiceChannelId}
-        activeDMFriendId={activeDMFriend?.id || null}
-        friends={friends}
-        onlineUsers={onlineUsers}
-        isMuted={isMuted}
-        isDeafened={isDeafened}
-        isSpeaking={isSpeaking}
-        onSelectHome={handleSelectHome}
-        onSelectDM={handleSelectDM}
-        onSelectServer={handleSelectServer}
-        onOpenCreateServer={() => setIsCreateServerOpen(true)}
-        onOpenCreateChannel={(type) => {
-          setCreateChannelType(type);
-          setIsCreateChannelOpen(true);
-        }}
-        onOpenInviteModal={() => setIsInviteModalOpen(true)}
-        onOpenServerSettings={() => setIsServerSettingsOpen(true)}
-        onLeaveServer={handleLeaveServer}
-        onSelectChannel={handleSelectChannel}
-        onJoinVoice={handleJoinVoice}
-        onViewVoiceRoom={handleViewVoiceRoom}
-        onLeaveVoice={handleLeaveVoice}
-        onToggleMute={handleToggleMute}
-        onToggleDeafen={handleToggleDeafen}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        onLogout={handleLogout}
-      />
+      {/* 4. TOP HORIZONTAL NAVIGATION DOCK (Novo Layout Minimalista & Elegante em Tons Violeta) */}
+      <header className="h-16 px-4 flex items-center justify-between gap-4 select-none shrink-0">
+        {/* Left: Brand Logo + Home Pill + Horizontal Server Pills */}
+        <div className="flex items-center gap-2.5 overflow-x-auto no-scrollbar py-1">
+          {/* Brand & Home Button */}
+          <button
+            onClick={handleSelectHome}
+            className={`flex items-center gap-2.5 pl-2 pr-4 py-1.5 rounded-2xl transition-all duration-200 cursor-pointer shrink-0 border ${
+              isAtHome
+                ? 'bg-gradient-to-r from-violet-600/35 to-fuchsia-600/25 border-violet-400/60 text-white shadow-lg shadow-violet-600/20'
+                : 'bg-[#120b20]/90 hover:bg-[#19102c] border-violet-500/20 text-slate-300 hover:text-white'
+            }`}
+            title="Ir para Início e Amigos"
+          >
+            <img
+              src="/logo.jpg"
+              alt="Janjacord"
+              className="w-8 h-8 rounded-xl object-cover shadow-md border border-violet-400/40"
+            />
+            <div className="text-left">
+              <div className="text-xs font-black tracking-tight leading-none text-white">Janjacord</div>
+              <div className="text-[10px] text-violet-300/80 font-semibold flex items-center gap-1 mt-0.5">
+                <Home className="w-2.5 h-2.5" />
+                <span>Início</span>
+              </div>
+            </div>
+          </button>
 
-      {/* 5. Main Center Stage */}
-      {/* If user is in voice AND viewing the stage: show VoiceRoom */}
-      <div className="flex-1 flex overflow-hidden">
-        {currentVoiceChannelId && activeVoiceChannel && voiceViewMode === 'stage' ? (
-          <VoiceRoom
-            channel={activeVoiceChannel}
-            currentUser={currentUser}
-            usersInRoom={usersInVoiceRoom}
-            isMuted={isMuted}
-            isDeafened={isDeafened}
-            isSpeaking={isSpeaking}
-            isScreenSharing={isScreenSharing}
-            streamQuality={streamQuality}
-            localScreenStream={localScreenStream}
-            remoteStreams={remoteStreams}
-            isDMCall={!!dmVoiceTarget}
-            targetDMFriend={dmVoiceTarget}
-            dmMessages={dmMessages}
-            channelMessages={activeChannel ? messages.filter((m) => m.channelId === activeChannel.id) : []}
-            onSendMessage={(text, attachment) => {
-              if (dmVoiceTarget) {
-                handleSendDM(text, attachment);
-              } else if (currentServer && activeChannel) {
-                handleSendMessage(text, attachment);
-              }
-            }}
-            onToggleMute={handleToggleMute}
-            onToggleDeafen={handleToggleDeafen}
-            onToggleScreenShare={handleToggleScreenShare}
-            onLeaveVoice={handleLeaveVoice}
-            onChangeQuality={handleChangeQuality}
-          />
-        ) : currentServer && activeChannel?.type === 'media' ? (
-          /* Synchronized Media Room (Watch Together & Music DJ) */
-          <MediaRoom
-            channel={activeChannel}
-            currentUser={currentUser}
-            mediaState={mediaRoomState}
-            messages={messages.filter((m) => m.serverId === currentServer.id)}
-            onSendMessage={handleSendMessage}
-            onPlayMedia={handlePlayMedia}
-            onSyncAction={handleMediaSyncAction}
-            onHeartbeat={handleMediaHeartbeat}
-            onVoteSkip={handleVoteSkip}
-            onSelectUser={(u) => setSelectedProfileUser(u)}
-          />
-        ) : currentServer && activeChannel ? (
-          /* If user is inside a server's text channel (can be talking in voice at the same time!) */
-          <ChatArea
-            channel={activeChannel}
-            currentUser={currentUser}
-            messages={messages.filter((m) => m.serverId === currentServer.id)}
-            onSendMessage={handleSendMessage}
-            onSelectUser={(u) => setSelectedProfileUser(u)}
-          />
-        ) : activeDMFriend ? (
-          /* 1-on-1 private chat with friend */
-          <DMChatArea
-            currentUser={currentUser}
-            targetFriend={activeDMFriend}
-            messages={dmMessages}
-            onSendMessage={handleSendDM}
-            onStartCall={handleStartDMCall}
-            onRespondServerInvite={handleRespondServerInvite}
-          />
-        ) : (
-          /* Default: Home View */
-          <HomeView
-            currentUser={currentUser}
-            onlineUsers={onlineUsers}
-            servers={servers}
-            friends={friends}
-            onOpenCreateServer={() => setIsCreateServerOpen(true)}
-            onSelectServer={handleSelectServer}
-            onJoinVoice={handleJoinVoice}
-            onSendFriendRequest={handleSendFriendRequest}
-            onAcceptFriend={handleAcceptFriend}
-            onRemoveFriend={handleRemoveFriend}
-          />
-        )}
+          <div className="w-[1px] h-7 bg-violet-500/20 mx-0.5 shrink-0" />
 
-        {/* Server Members Sidebar: Shown in text channels (hidden in media/stage rooms to maximize player size) */}
-        {currentServer && activeChannel?.type !== 'media' && !(currentVoiceChannelId && voiceViewMode === 'stage') && (
-          <ServerMemberList
-            server={currentServer}
-            currentUser={currentUser}
-            onlineUsers={onlineUsers}
-            allMembersInfo={allServerMembers}
-            onSelectMember={(member) => setSelectedProfileUser(member)}
-          />
-        )}
+          {/* Horizontal Server Pills */}
+          {servers.map((server) => {
+            const isSelected = currentServer?.id === server.id;
+            return (
+              <button
+                key={server.id}
+                onClick={() => handleSelectServer(server)}
+                className={`flex items-center gap-2.5 pl-2 pr-3.5 py-1.5 rounded-2xl transition-all duration-200 cursor-pointer shrink-0 border ${
+                  isSelected
+                    ? 'bg-gradient-to-r from-violet-600/35 to-purple-600/25 border-violet-400/60 text-white shadow-lg shadow-violet-600/20 scale-[1.02]'
+                    : 'bg-[#120b20]/80 hover:bg-[#1a112e] border-violet-500/15 text-slate-300 hover:text-white'
+                }`}
+                title={server.name}
+              >
+                <div
+                  className="w-7 h-7 rounded-xl flex items-center justify-center font-black text-white text-xs shadow-sm shrink-0"
+                  style={{ backgroundColor: server.iconColor }}
+                >
+                  {getServerInitials(server.name)}
+                </div>
+                <span className="text-xs font-bold max-w-[120px] truncate">{server.name}</span>
+              </button>
+            );
+          })}
+
+          {/* Create / Join Server Button */}
+          <button
+            onClick={() => setIsCreateServerOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-violet-600/15 hover:bg-violet-600 text-violet-300 hover:text-white border border-violet-500/30 transition-all duration-200 text-xs font-bold cursor-pointer shrink-0 shadow-sm"
+            title="Criar ou Entrar em um Servidor"
+          >
+            <Plus className="w-4 h-4" />
+            <span className="hidden sm:inline">Novo Espaço</span>
+          </button>
+        </div>
+
+        {/* Right: Active Call Pill + Download Desktop App Button + User Capsule */}
+        <div className="flex items-center gap-2.5 shrink-0">
+          {/* Active Voice Call Pill in Top Bar */}
+          {currentVoiceChannelId && (
+            <div className="hidden md:flex items-center gap-2 bg-emerald-500/15 border border-emerald-500/35 px-3 py-1.5 rounded-2xl">
+              <button
+                onClick={handleViewVoiceRoom}
+                className="flex items-center gap-2 text-xs font-bold text-emerald-300 hover:text-white transition cursor-pointer"
+              >
+                <Volume2 className="w-3.5 h-3.5 animate-pulse" />
+                <span>Ver Transmissão</span>
+              </button>
+              <button
+                onClick={handleLeaveVoice}
+                className="p-1 text-emerald-300 hover:text-rose-400 transition cursor-pointer"
+                title="Desconectar"
+              >
+                <PhoneOff className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* Botão Baixar App para Windows (.exe) — Visível no Site */}
+          {!isElectron && (
+            <button
+              onClick={() => setIsDownloadModalOpen(true)}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white text-xs font-black tracking-wide shadow-lg shadow-violet-600/30 transition cursor-pointer"
+              title="Baixar Aplicativo Janjacord para Windows (.exe)"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Baixar App</span>
+            </button>
+          )}
+
+          {/* User Control Capsule */}
+          <div className="flex items-center gap-2 bg-[#120b20]/90 border border-violet-500/20 pl-2 pr-2.5 py-1.5 rounded-2xl shadow-lg">
+            <div
+              onClick={() => setIsSettingsOpen(true)}
+              className="flex items-center gap-2 cursor-pointer group pr-1"
+              title="Editar Perfil e Foto"
+            >
+              <div className="relative shrink-0">
+                {currentUser?.avatarUrl ? (
+                  <img
+                    src={currentUser.avatarUrl}
+                    alt={currentUser.displayName}
+                    className={`w-8 h-8 rounded-xl object-cover transition-all ${
+                      isSpeaking ? 'ring-2 ring-emerald-400' : ''
+                    }`}
+                  />
+                ) : (
+                  <div
+                    className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold text-white text-xs transition-all ${
+                      isSpeaking ? 'ring-2 ring-emerald-400' : ''
+                    }`}
+                    style={{ backgroundColor: currentUser?.avatarColor || '#8b5cf6' }}
+                  >
+                    {(currentUser?.displayName || '?').slice(0, 1).toUpperCase()}
+                  </div>
+                )}
+                <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-[#120b20]" />
+              </div>
+
+              <div className="hidden sm:block text-left max-w-[110px]">
+                <div className="text-xs font-bold text-slate-100 truncate group-hover:text-violet-300 transition leading-tight">
+                  {currentUser?.name || currentUser?.displayName || 'Jogador'}
+                </div>
+                <div className="text-[10px] text-violet-300/60 font-mono leading-tight">
+                  #{currentUser?.tag || '001'}
+                </div>
+              </div>
+            </div>
+
+            <div className="w-[1px] h-5 bg-violet-500/20" />
+
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={handleToggleMute}
+                className={`p-1.5 rounded-xl hover:bg-violet-500/15 transition cursor-pointer ${
+                  isMuted ? 'text-rose-400 bg-rose-500/10' : 'text-slate-300 hover:text-white'
+                }`}
+                title={isMuted ? 'Desmutar Microfone' : 'Mutar Microfone'}
+              >
+                {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+              </button>
+              <button
+                onClick={handleToggleDeafen}
+                className={`p-1.5 rounded-xl hover:bg-violet-500/15 transition cursor-pointer ${
+                  isDeafened ? 'text-rose-400 bg-rose-500/10' : 'text-slate-300 hover:text-white'
+                }`}
+                title={isDeafened ? 'Reativar Áudio' : 'Ensurdecer'}
+              >
+                <Headphones className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => setIsSettingsOpen(true)}
+                className="p-1.5 rounded-xl text-slate-300 hover:text-white hover:bg-violet-500/15 transition cursor-pointer"
+                title="Configurações de Perfil"
+              >
+                <Settings className="w-4 h-4" />
+              </button>
+              <button
+                onClick={handleLogout}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-rose-400 hover:bg-rose-500/15 transition cursor-pointer"
+                title="Sair da Conta"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* 5. MAIN WORKSPACE: Floating Left Panel + Floating Center Stage */}
+      <div className="flex-1 flex gap-3 px-3 pb-3 overflow-hidden min-h-0">
+        {/* Left Context Panel */}
+        <Sidebar
+          currentUser={currentUser}
+          servers={servers}
+          currentServer={currentServer}
+          activeChannel={activeChannel}
+          currentVoiceChannelId={currentVoiceChannelId}
+          activeDMFriendId={activeDMFriend?.id || null}
+          friends={friends}
+          onlineUsers={onlineUsers}
+          isMuted={isMuted}
+          isDeafened={isDeafened}
+          isSpeaking={isSpeaking}
+          onSelectHome={handleSelectHome}
+          onSelectDM={handleSelectDM}
+          onSelectServer={handleSelectServer}
+          onOpenCreateServer={() => setIsCreateServerOpen(true)}
+          onOpenCreateChannel={(type) => {
+            setCreateChannelType(type);
+            setIsCreateChannelOpen(true);
+          }}
+          onOpenInviteModal={() => setIsInviteModalOpen(true)}
+          onOpenServerSettings={() => setIsServerSettingsOpen(true)}
+          onLeaveServer={handleLeaveServer}
+          onSelectChannel={handleSelectChannel}
+          onJoinVoice={handleJoinVoice}
+          onViewVoiceRoom={handleViewVoiceRoom}
+          onLeaveVoice={handleLeaveVoice}
+          onToggleMute={handleToggleMute}
+          onToggleDeafen={handleToggleDeafen}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onLogout={handleLogout}
+        />
+
+        {/* Floating Main Stage */}
+        <main className="flex-1 bg-[#100a1e]/85 backdrop-blur-xl border border-violet-500/15 rounded-3xl flex overflow-hidden shadow-2xl min-w-0">
+          {currentVoiceChannelId && activeVoiceChannel && voiceViewMode === 'stage' ? (
+            <VoiceRoom
+              channel={activeVoiceChannel}
+              currentUser={currentUser}
+              usersInRoom={usersInVoiceRoom}
+              isMuted={isMuted}
+              isDeafened={isDeafened}
+              isSpeaking={isSpeaking}
+              isScreenSharing={isScreenSharing}
+              streamQuality={streamQuality}
+              localScreenStream={localScreenStream}
+              remoteStreams={remoteStreams}
+              isDMCall={!!dmVoiceTarget}
+              targetDMFriend={dmVoiceTarget}
+              dmMessages={dmMessages}
+              channelMessages={activeChannel ? messages.filter((m) => m.channelId === activeChannel.id) : []}
+              onSendMessage={(text, attachment) => {
+                if (dmVoiceTarget) {
+                  handleSendDM(text, attachment);
+                } else if (currentServer && activeChannel) {
+                  handleSendMessage(text, attachment);
+                }
+              }}
+              onToggleMute={handleToggleMute}
+              onToggleDeafen={handleToggleDeafen}
+              onToggleScreenShare={handleToggleScreenShare}
+              onLeaveVoice={handleLeaveVoice}
+              onChangeQuality={handleChangeQuality}
+            />
+          ) : currentServer && activeChannel?.type === 'media' ? (
+            <MediaRoom
+              channel={activeChannel}
+              currentUser={currentUser}
+              mediaState={mediaRoomState}
+              messages={messages.filter((m) => m.serverId === currentServer.id)}
+              onSendMessage={handleSendMessage}
+              onPlayMedia={handlePlayMedia}
+              onSyncAction={handleMediaSyncAction}
+              onHeartbeat={handleMediaHeartbeat}
+              onVoteSkip={handleVoteSkip}
+              onSelectUser={(u) => setSelectedProfileUser(u)}
+            />
+          ) : currentServer && activeChannel ? (
+            <ChatArea
+              channel={activeChannel}
+              currentUser={currentUser}
+              messages={messages.filter((m) => m.serverId === currentServer.id)}
+              onSendMessage={handleSendMessage}
+              onSelectUser={(u) => setSelectedProfileUser(u)}
+            />
+          ) : activeDMFriend ? (
+            <DMChatArea
+              currentUser={currentUser}
+              targetFriend={activeDMFriend}
+              messages={dmMessages}
+              onSendMessage={handleSendDM}
+              onStartCall={handleStartDMCall}
+              onRespondServerInvite={handleRespondServerInvite}
+            />
+          ) : (
+            <HomeView
+              currentUser={currentUser}
+              onlineUsers={onlineUsers}
+              servers={servers}
+              friends={friends}
+              onOpenCreateServer={() => setIsCreateServerOpen(true)}
+              onSelectServer={handleSelectServer}
+              onJoinVoice={handleJoinVoice}
+              onSendFriendRequest={handleSendFriendRequest}
+              onAcceptFriend={handleAcceptFriend}
+              onRemoveFriend={handleRemoveFriend}
+              downloadUrl={DESKTOP_APP_DOWNLOAD_URL}
+            />
+          )}
+
+          {/* Server Members Sidebar */}
+          {currentServer && activeChannel?.type !== 'media' && !(currentVoiceChannelId && voiceViewMode === 'stage') && (
+            <ServerMemberList
+              server={currentServer}
+              currentUser={currentUser}
+              onlineUsers={onlineUsers}
+              allMembersInfo={allServerMembers}
+              onSelectMember={(member) => setSelectedProfileUser(member)}
+            />
+          )}
+        </main>
       </div>
 
       {/* 6. Modals */}
+      <ScreenShareModal
+        isOpen={isScreenPickerOpen}
+        currentQuality={streamQuality}
+        onClose={() => setIsScreenPickerOpen(false)}
+        onConfirm={handleConfirmElectronScreenShare}
+      />
+
+      {/* Modal de Download do Aplicativo Desktop (.exe) */}
+      {isDownloadModalOpen && (
+        <div
+          className="fixed inset-0 z-[90] bg-black/75 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-150 select-none"
+          onClick={() => setIsDownloadModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-md bg-[#120b22] border border-violet-500/35 rounded-3xl p-6 shadow-2xl shadow-violet-950/60 space-y-5 relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setIsDownloadModalOpen(false)}
+              className="absolute top-4 right-4 p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center gap-4">
+              <img
+                src="/logo.jpg"
+                alt="Janjacord"
+                className="w-16 h-16 rounded-2xl object-cover border-2 border-violet-400/50 shadow-xl"
+              />
+              <div>
+                <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30">
+                  Windows 10 / 11 (64-bit)
+                </span>
+                <h3 className="text-lg font-black text-white mt-1">Janjacord para Windows</h3>
+                <p className="text-xs text-violet-300/70">Versão Desktop Oficial (.exe)</p>
+              </div>
+            </div>
+
+            <div className="bg-[#0b0714] border border-violet-500/20 rounded-2xl p-4 space-y-2.5 text-xs text-slate-200">
+              <div className="flex items-center gap-2.5">
+                <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Seletor nativo de Telas Inteiras, Janelas e Jogos</span>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Compartilhamento de Áudio do Sistema integrado</span>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Transmissão em até 1080p 60 FPS com baixo uso de CPU</span>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Sincronizado em tempo real com os usuários do navegador</span>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <a
+                href={DESKTOP_APP_DOWNLOAD_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setIsDownloadModalOpen(false)}
+                className="w-full py-3.5 px-5 rounded-2xl bg-gradient-to-r from-violet-600 via-purple-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white text-sm font-black tracking-wide shadow-xl shadow-violet-600/30 flex items-center justify-center gap-2.5 transition cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>Baixar Janjacord-Windows.exe</span>
+              </a>
+              <div className="text-[11px] text-center text-violet-300/50 flex items-center justify-center gap-1.5">
+                <Monitor className="w-3.5 h-3.5" />
+                <span>Executável portátil — basta baixar e abrir, sem instalação complexa!</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <CreateServerModal
         isOpen={isCreateServerOpen}
         onClose={() => setIsCreateServerOpen(false)}

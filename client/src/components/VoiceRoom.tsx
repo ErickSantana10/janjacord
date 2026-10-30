@@ -1,23 +1,33 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { 
-  Mic, 
-  MicOff, 
-  Headphones, 
-  Monitor, 
-  MonitorOff, 
-  PhoneOff, 
-  Maximize2, 
-  Sliders, 
-  Users, 
-  MessageSquare, 
-  Send, 
-  X, 
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  Mic,
+  MicOff,
+  Headphones,
+  Monitor,
+  PhoneOff,
+  Maximize2,
+  Minimize2,
+  Sliders,
+  Sparkles,
   Volume2,
-  VolumeX,
-  Play
+  MessageSquare,
+  Send,
+  Paperclip,
+  FileText,
+  Download,
+  X,
 } from 'lucide-react';
-import { QUALITY_PRESETS } from '../types';
-import type { Channel, User, OnlineUser, StreamQualityPreset, DMMessage, Message, MessageAttachment, FriendItem } from '../types';
+import {
+  QUALITY_PRESETS,
+  type Channel,
+  type OnlineUser,
+  type StreamQualityPreset,
+  type User,
+  type FriendItem,
+  type DMMessage,
+  type Message,
+  type MessageAttachment,
+} from '../types';
 
 interface RemoteStreamItem {
   peerId: string;
@@ -36,13 +46,11 @@ interface VoiceRoomProps {
   streamQuality: StreamQualityPreset;
   localScreenStream: MediaStream | null;
   remoteStreams: RemoteStreamItem[];
-  // Side chat integration
   isDMCall?: boolean;
   targetDMFriend?: FriendItem['friend'] | null;
   dmMessages?: DMMessage[];
   channelMessages?: Message[];
   onSendMessage?: (text: string, attachment?: MessageAttachment) => void;
-  // Handlers
   onToggleMute: () => void;
   onToggleDeafen: () => void;
   onToggleScreenShare: () => void;
@@ -62,7 +70,7 @@ export const VoiceRoom: React.FC<VoiceRoomProps> = ({
   localScreenStream,
   remoteStreams,
   isDMCall = false,
-  targetDMFriend,
+  targetDMFriend = null,
   dmMessages = [],
   channelMessages = [],
   onSendMessage,
@@ -72,540 +80,449 @@ export const VoiceRoom: React.FC<VoiceRoomProps> = ({
   onLeaveVoice,
   onChangeQuality,
 }) => {
-  const [isChatOpen, setIsChatOpen] = useState(false);
-  const [chatInputText, setChatInputText] = useState('');
-  
-  // Stream watching state: default false so user chooses when to watch
-  const [isWatchingStream, setIsWatchingStream] = useState<boolean>(false);
-  const [streamVolume, setStreamVolume] = useState<number>(1);
-  const [isStreamMuted, setIsStreamMuted] = useState<boolean>(false);
+  const [focusedStream, setFocusedStream] = useState<'local' | string | null>(null);
+  const [showQualityMenu, setShowQualityMenu] = useState(false);
+  const [showCallChat, setShowCallChat] = useState(isDMCall);
+  const [chatInput, setChatInput] = useState('');
+  const [pendingAttachment, setPendingAttachment] = useState<MessageAttachment | null>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const sideChatEndRef = useRef<HTMLDivElement>(null);
+  const screenShares = remoteStreams.filter((s) => s.isScreen);
+  const audioStreams = remoteStreams.filter((s) => !s.isScreen);
 
-  // Determine who is actively sharing screen in this room
-  const remoteScreenItem = remoteStreams.find((s) => s.isScreen);
-  const isAnyPeerSharing = usersInRoom.some((u) => u.isScreenSharing);
-  const hasActiveScreenStream = !!(localScreenStream || (remoteScreenItem && isAnyPeerSharing));
-
-  const activeScreenStream = hasActiveScreenStream
-    ? (localScreenStream || remoteScreenItem?.stream || null)
-    : null;
-
-  const isBroadcastingLocal = !!localScreenStream;
-
-  // Find who is sharing screen
-  const screenSharerUser = isBroadcastingLocal
-    ? currentUser
-    : usersInRoom.find((u) => u.isScreenSharing);
-
-  // If local user is broadcasting their own screen, automatically let them view their local monitor
+  // Reseta o foco automaticamente se a transmissão focada for encerrada
   useEffect(() => {
-    if (isBroadcastingLocal) {
-      setIsWatchingStream(true);
-    }
-  }, [isBroadcastingLocal]);
-
-  // If the stream ended or person stopped sharing, turn off watching
-  useEffect(() => {
-    if (!hasActiveScreenStream) {
-      setIsWatchingStream(false);
-    }
-  }, [hasActiveScreenStream]);
-
-  // Sync video source & volume
-  useEffect(() => {
-    if (videoRef.current) {
-      if (activeScreenStream && isWatchingStream) {
-        videoRef.current.srcObject = activeScreenStream;
-        videoRef.current.volume = isStreamMuted ? 0 : streamVolume;
-      } else {
-        videoRef.current.srcObject = null;
+    if (focusedStream === 'local' && (!isScreenSharing || !localScreenStream)) {
+      setFocusedStream(null);
+    } else if (focusedStream && focusedStream !== 'local') {
+      const stillExists = screenShares.some((s) => s.peerId === focusedStream);
+      if (!stillExists) {
+        setFocusedStream(null);
       }
     }
-  }, [activeScreenStream, isWatchingStream, streamVolume, isStreamMuted]);
+  }, [focusedStream, isScreenSharing, localScreenStream, screenShares]);
+
+  const activeCallMessages =
+    isDMCall && targetDMFriend
+      ? dmMessages.filter(
+          (m) =>
+            (m.fromUserId === currentUser?.id && m.toUserId === targetDMFriend.id) ||
+            (m.fromUserId === targetDMFriend.id && m.toUserId === currentUser?.id)
+        )
+      : channelMessages;
 
   useEffect(() => {
-    if (isChatOpen) {
-      sideChatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [isChatOpen, dmMessages, channelMessages]);
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [activeCallMessages.length, showCallChat]);
 
-  const toggleFullscreen = () => {
-    if (!containerRef.current) return;
-    if (!document.fullscreenElement) {
-      containerRef.current.requestFullscreen().catch(console.error);
-    } else {
-      document.exitFullscreen().catch(console.error);
-    }
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) return;
+    const isImage = file.type.startsWith('image/');
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setPendingAttachment({
+          name: file.name,
+          type: isImage ? 'image' : 'file',
+          url: reader.result,
+          size: file.size,
+        });
+      }
+    };
+    reader.readAsDataURL(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleSendSideChatMessage = (e: React.FormEvent) => {
+  const handleChatSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInputText.trim() || !onSendMessage) return;
-    onSendMessage(chatInputText.trim());
-    setChatInputText('');
-  };
-
-  const displayedMessages = isDMCall && targetDMFriend
-    ? dmMessages.filter(
-        (m) =>
-          (m.fromUserId === currentUser?.id && m.toUserId === targetDMFriend.id) ||
-          (m.fromUserId === targetDMFriend.id && m.toUserId === currentUser?.id)
-      )
-    : channelMessages;
-
-  // Responsive grid layout based on number of participants
-  const getGridColsClass = () => {
-    const count = usersInRoom.length;
-    if (count <= 1) return 'max-w-xl grid-cols-1';
-    if (count === 2) return 'max-w-3xl grid-cols-2';
-    if (count <= 4) return 'max-w-4xl grid-cols-2';
-    return 'max-w-5xl grid-cols-2 sm:grid-cols-3 md:grid-cols-4';
+    if ((!chatInput.trim() && !pendingAttachment) || !onSendMessage) return;
+    onSendMessage(chatInput.trim(), pendingAttachment || undefined);
+    setChatInput('');
+    setPendingAttachment(null);
   };
 
   return (
-    <div ref={containerRef} className="flex-1 bg-gradient-to-b from-[#13141f] via-[#0f1017] to-[#0a0b10] flex flex-col justify-between overflow-hidden relative">
-      {/* Hidden audio tags for remote voice audio streams (Only voice streams, not screen streams) */}
-      {remoteStreams.filter(s => !s.isScreen).map((item) => (
-        <AudioPlayer key={item.peerId} stream={item.stream} isDeafened={isDeafened} />
+    <div className="flex-1 bg-[#0a0612] flex flex-col justify-between overflow-hidden relative select-none">
+      {/* Hidden Audio Players for Remote Voice Peers */}
+      {audioStreams.map((item) => (
+        <RemoteAudioPlayer key={`${item.peerId}-audio`} stream={item.stream} muted={isDeafened} />
       ))}
 
-      {/* Top Bar inside Voice Room */}
-      <div className="h-12 px-6 bg-[#151622]/90 backdrop-blur-md border-b border-[#212330] flex items-center justify-between z-10">
+      {/* Top Header */}
+      <div className="h-14 px-6 border-b border-violet-500/15 flex items-center justify-between bg-[#100a1d]/90 backdrop-blur-md z-10">
         <div className="flex items-center gap-3">
-          <span className="font-bold text-slate-100 flex items-center gap-2">
-            {channel.name}
-          </span>
-          <span className="text-xs bg-emerald-500/15 text-emerald-400 px-2.5 py-0.5 rounded-full flex items-center gap-1.5 font-medium border border-emerald-500/20">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            Transmissão de Baixa Latência
-          </span>
+          <div className="w-8 h-8 rounded-xl bg-violet-500/15 border border-violet-500/25 flex items-center justify-center">
+            <Volume2 className="w-4 h-4 text-violet-400 animate-pulse" />
+          </div>
+          <div>
+            <div className="font-bold text-slate-100 text-sm">{channel.name}</div>
+            <div className="text-[11px] text-violet-300/60 font-medium">
+              {usersInRoom.length} {usersInRoom.length === 1 ? 'participante' : 'participantes'} na sala
+            </div>
+          </div>
         </div>
 
-        {/* Right side controls (Preset & Side Chat toggle) */}
+        {/* Stream Quality Selector & Chat Toggle */}
         <div className="flex items-center gap-2.5">
-          {/* Side Chat Toggle Button */}
+          <div className="relative">
+            <button
+              onClick={() => setShowQualityMenu(!showQualityMenu)}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#19112c] hover:bg-[#23183c] text-xs font-bold text-violet-200 border border-violet-500/25 transition cursor-pointer"
+            >
+              <Sliders className="w-3.5 h-3.5 text-fuchsia-400" />
+              <span>Qualidade: {QUALITY_PRESETS[streamQuality].label}</span>
+            </button>
+
+            {showQualityMenu && (
+              <div className="absolute right-0 mt-2 w-80 bg-[#140d24] border border-violet-500/30 rounded-2xl shadow-2xl p-3 z-50 space-y-2">
+                <div className="text-xs font-bold text-violet-300 px-2 py-1 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-fuchsia-400" />
+                  <span>Otimizador de Transmissão</span>
+                </div>
+                {(Object.keys(QUALITY_PRESETS) as StreamQualityPreset[]).map((key) => {
+                  const preset = QUALITY_PRESETS[key];
+                  const active = streamQuality === key;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => {
+                        onChangeQuality(key);
+                        setShowQualityMenu(false);
+                      }}
+                      className={`w-full text-left p-2.5 rounded-xl transition flex flex-col gap-0.5 cursor-pointer ${
+                        active
+                          ? 'bg-violet-600/25 border border-violet-500/50 text-white'
+                          : 'hover:bg-[#1e1433] text-slate-300'
+                      }`}
+                    >
+                      <div className="text-xs font-bold flex items-center justify-between">
+                        <span>{preset.label}</span>
+                        {active && (
+                          <span className="text-[10px] bg-violet-600 text-white px-1.5 py-0.5 rounded-md">
+                            ATIVO
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-slate-400">{preset.description}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           <button
-            onClick={() => setIsChatOpen(!isChatOpen)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition cursor-pointer ${
-              isChatOpen
-                ? 'bg-indigo-600 text-white border-indigo-500 shadow-md shadow-indigo-600/30'
-                : 'bg-[#1b1c28] text-slate-300 border-[#27293a] hover:bg-[#252738]'
+            onClick={() => setShowCallChat(!showCallChat)}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold border transition cursor-pointer ${
+              showCallChat
+                ? 'bg-gradient-to-r from-violet-600 to-purple-600 border-violet-400 text-white shadow-lg shadow-violet-600/20'
+                : 'bg-[#19112c] hover:bg-[#23183c] border-violet-500/25 text-violet-200'
             }`}
-            title="Abrir Chat de Texto ao Lado da Chamada"
+            title="Abrir/Fechar Chat da Chamada"
           >
             <MessageSquare className="w-3.5 h-3.5" />
-            <span>Chat da Call</span>
+            <span>Chat</span>
           </button>
-
-          {/* Screen Quality Quick Switcher */}
-          <div className="flex items-center gap-1.5 bg-[#1b1c28] px-3 py-1.5 rounded-xl border border-[#27293a] text-xs">
-            <Sliders className="w-3.5 h-3.5 text-indigo-400" />
-            <span className="text-slate-400 mr-1">Preset:</span>
-            <select
-              value={streamQuality}
-              onChange={(e) => onChangeQuality(e.target.value as StreamQualityPreset)}
-              className="bg-transparent text-slate-200 font-medium outline-none cursor-pointer"
-            >
-              <option value="potato" className="bg-[#1b1c28] text-slate-200">🥔 480p 20fps (PC Fraco)</option>
-              <option value="balanced" className="bg-[#1b1c28] text-slate-200">⚖️ 720p 30fps (Padrão)</option>
-              <option value="gamer" className="bg-[#1b1c28] text-slate-200">🚀 1080p 60fps (Gamer)</option>
-            </select>
-          </div>
-
-          <div className="flex items-center gap-1.5 text-slate-300 text-xs px-2.5 py-1.5 bg-[#1b1c28] rounded-xl border border-[#27293a]">
-            <Users className="w-3.5 h-3.5 text-indigo-400" />
-            <span className="font-mono font-semibold">{usersInRoom.length}</span>
-          </div>
         </div>
       </div>
 
-      {/* Main Content Area (Split between Stage and Side Chat) */}
+      {/* Main Content Area: Stage + Optional Side Chat */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left/Center Stage: Screen Share or Avatars Grid */}
-        <div className="flex-1 p-6 flex flex-col items-center justify-center overflow-hidden">
-          {activeScreenStream && isWatchingStream ? (
-            /* ACTIVE WATCHING STREAM VIEW */
-            <div className="w-full h-full max-h-[calc(100vh-170px)] flex flex-col items-center justify-center">
-              <div className="relative w-full h-full bg-black rounded-2xl overflow-hidden shadow-2xl border border-[#26283d] group flex items-center justify-center">
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted={isBroadcastingLocal || isStreamMuted}
-                  className="w-full h-full object-contain"
-                />
+        {/* Stage / Grid Area */}
+        <div className="flex-1 p-6 overflow-y-auto flex flex-col gap-6 items-center justify-center">
+          {/* Spotlight / Focused Screen Share Mode */}
+          {focusedStream && (
+            <div className="w-full h-full max-h-[74vh] bg-black rounded-3xl overflow-hidden border border-violet-500/30 relative shadow-2xl shadow-violet-950/40 flex items-center justify-center">
+              {focusedStream === 'local' && localScreenStream ? (
+                <StreamVideo stream={localScreenStream} muted={true} />
+              ) : (
+                (() => {
+                  const target = screenShares.find((s) => s.peerId === focusedStream);
+                  return target ? <StreamVideo stream={target.stream} muted={isDeafened} /> : null;
+                })()
+              )}
 
-                {/* Top Overlay Badge */}
-                <div className="absolute top-4 left-4 bg-black/75 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-white/10 flex items-center gap-2 text-xs text-white">
-                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
-                  <span className="font-semibold">
-                    {isBroadcastingLocal ? 'Você está transmitindo' : `Assistindo ${screenSharerUser?.name || 'Transmissão'}`}
-                  </span>
-                  <span className="text-slate-400 font-mono text-[11px] ml-1 bg-white/10 px-1.5 py-0.5 rounded">
-                    {QUALITY_PRESETS[streamQuality].label.split(' ')[1]}
-                  </span>
-                </div>
+              <button
+                onClick={() => setFocusedStream(null)}
+                className="absolute top-4 right-4 bg-black/75 hover:bg-violet-950/90 text-white p-2.5 rounded-xl backdrop-blur-md border border-violet-500/30 transition flex items-center gap-1.5 text-xs font-bold cursor-pointer"
+              >
+                <Minimize2 className="w-4 h-4" />
+                <span>Voltar para Grade</span>
+              </button>
+            </div>
+          )}
 
-                {/* Top Right Controls: Volume slider, parar de assistir e fullscreen */}
-                <div className="absolute top-4 right-4 flex items-center gap-2 opacity-90 group-hover:opacity-100 transition-opacity">
-                  {/* Volume Control (only for viewers) */}
-                  {!isBroadcastingLocal && (
-                    <div className="flex items-center gap-2 bg-black/75 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 text-white">
-                      <button
-                        type="button"
-                        onClick={() => setIsStreamMuted(!isStreamMuted)}
-                        className="text-slate-300 hover:text-white transition cursor-pointer"
-                        title={isStreamMuted ? 'Desmutar Transmissão' : 'Mutar Transmissão'}
-                      >
-                        {isStreamMuted || streamVolume === 0 ? (
-                          <VolumeX className="w-4 h-4 text-rose-400" />
-                        ) : (
-                          <Volume2 className="w-4 h-4 text-indigo-400" />
-                        )}
-                      </button>
-
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={isStreamMuted ? 0 : streamVolume}
-                        onChange={(e) => {
-                          setStreamVolume(parseFloat(e.target.value));
-                          setIsStreamMuted(false);
-                        }}
-                        className="w-16 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                        title={`Volume da Stream: ${Math.round((isStreamMuted ? 0 : streamVolume) * 100)}%`}
-                      />
-
-                      <span className="text-[10px] font-mono text-slate-400 w-7 text-right">
-                        {Math.round((isStreamMuted ? 0 : streamVolume) * 100)}%
+          {/* Normal Grid View (Screens + User Cards) */}
+          {!focusedStream && (
+            <div className="w-full max-w-6xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 auto-rows-fr">
+              {/* 1. Local Screen Share Card */}
+              {isScreenSharing && localScreenStream && (
+                <div className="col-span-1 md:col-span-2 aspect-video bg-black rounded-3xl overflow-hidden border-2 border-violet-500/60 relative group shadow-2xl shadow-violet-900/25">
+                  <StreamVideo stream={localScreenStream} muted={true} />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-between p-4">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2.5 py-0.5 text-[10px] font-black bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white rounded-md uppercase tracking-wider shadow">
+                        AO VIVO • SUA TELA ({QUALITY_PRESETS[streamQuality].name.toUpperCase()})
                       </span>
                     </div>
-                  )}
-
-                  {/* Stop Watching Button */}
-                  {!isBroadcastingLocal && (
                     <button
-                      onClick={() => setIsWatchingStream(false)}
-                      className="px-3 py-1.5 bg-black/75 hover:bg-rose-500 text-slate-200 hover:text-white rounded-xl backdrop-blur-md border border-white/10 text-xs font-semibold transition cursor-pointer flex items-center gap-1.5 shadow-md"
-                      title="Parar de assistir a transmissão e ver a call"
+                      onClick={() => setFocusedStream('local')}
+                      className="p-2 bg-black/60 hover:bg-violet-600 text-white rounded-xl backdrop-blur-md transition cursor-pointer"
+                      title="Expandir Tela"
                     >
-                      <X className="w-3.5 h-3.5" />
-                      <span>Parar de Assistir</span>
+                      <Maximize2 className="w-4 h-4" />
                     </button>
-                  )}
-
-                  <button
-                    onClick={toggleFullscreen}
-                    className="p-2 bg-black/75 hover:bg-black text-white rounded-xl backdrop-blur-md border border-white/10 transition cursor-pointer"
-                    title="Tela Cheia"
-                  >
-                    <Maximize2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Sub-strip of participant avatars */}
-              <div className="flex items-center gap-3 mt-3 overflow-x-auto py-1">
-                {usersInRoom.map((user) => {
-                  const isMe = user.id === currentUser?.id;
-                  const userSpeaking = isMe ? isSpeaking : false;
-
-                  return (
-                    <div
-                      key={user.id}
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#171826] border transition-all ${
-                        userSpeaking ? 'border-emerald-500 shadow-md shadow-emerald-500/20' : 'border-[#27293d]'
-                      }`}
-                    >
-                      {user.avatarUrl ? (
-                        <img
-                          src={user.avatarUrl}
-                          alt={user.name}
-                          className="w-6 h-6 rounded-full object-cover shrink-0"
-                        />
-                      ) : (
-                        <div
-                          className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
-                          style={{ backgroundColor: user.avatarColor }}
-                        >
-                          {user.name.slice(0, 1).toUpperCase()}
-                        </div>
-                      )}
-                      <span className="text-xs text-slate-200 font-medium truncate max-w-[120px]">{user.name}</span>
-                      {user.isMuted && <MicOff className="w-3 h-3 text-rose-400" />}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ) : (
-            /* Centered, proportioned Discord style grid of users */
-            <div className="w-full flex flex-col items-center justify-center space-y-4">
-              {/* If someone is sharing screen and user is not watching: Show prominent watch banner with their name */}
-              {isAnyPeerSharing && !isBroadcastingLocal && !isWatchingStream && (
-                <div className="bg-[#1c1d2e] border border-indigo-500/40 rounded-2xl p-4 flex items-center justify-between shadow-2xl max-w-xl w-full">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-indigo-600/20 text-indigo-400 flex items-center justify-center">
-                      <Monitor className="w-5 h-5 animate-pulse" />
-                    </div>
-                    <div>
-                      <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                        <span>{screenSharerUser?.name || 'Um amigo'}</span>
-                        <span className="text-[10px] bg-rose-500 text-white font-mono px-1.5 py-0.2 rounded font-bold animate-pulse">
-                          AO VIVO
-                        </span>
-                      </h4>
-                      <p className="text-xs text-slate-400">
-                        Está compartilhando a tela na sala.
-                      </p>
-                    </div>
                   </div>
-
-                  <button
-                    onClick={() => setIsWatchingStream(true)}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-lg shadow-indigo-600/30 cursor-pointer"
-                  >
-                    <Play className="w-3.5 h-3.5 fill-current" />
-                    <span>Assistir Stream</span>
-                  </button>
                 </div>
               )}
 
-              <div className={`w-full ${getGridColsClass()} grid gap-5 p-4 mx-auto items-center justify-center`}>
-                {usersInRoom.map((user) => {
-                  const isMe = user.id === currentUser?.id;
-                  const userSpeaking = isMe ? isSpeaking : false;
-                  const userIsSharing = user.isScreenSharing;
+              {/* 2. Remote Screen Shares */}
+              {screenShares.map((share) => {
+                const peerUser = usersInRoom.find((u) => u.socketId === share.peerId);
+                return (
+                  <div
+                    key={`${share.peerId}-screen`}
+                    className="col-span-1 md:col-span-2 aspect-video bg-black rounded-3xl overflow-hidden border-2 border-fuchsia-500/60 relative group shadow-2xl shadow-fuchsia-900/20"
+                  >
+                    <StreamVideo stream={share.stream} muted={isDeafened} />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-between p-4">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2.5 py-0.5 text-[10px] font-black bg-rose-600 text-white rounded-md uppercase tracking-wider animate-pulse">
+                          AO VIVO
+                        </span>
+                        <span className="text-sm font-bold text-white">
+                          Tela de {peerUser?.displayName || 'Participante'}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setFocusedStream(share.peerId)}
+                        className="p-2 bg-black/60 hover:bg-violet-600 text-white rounded-xl backdrop-blur-md transition cursor-pointer"
+                        title="Assistir em Tela Cheia"
+                      >
+                        <Maximize2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
 
-                  return (
-                    <div
-                      key={user.id}
-                      onClick={() => {
-                        if (userIsSharing && !isMe) {
-                          setIsWatchingStream(true);
-                        }
-                      }}
-                      className={`aspect-video rounded-3xl bg-[#141522]/90 backdrop-blur-sm border flex flex-col items-center justify-center relative group shadow-2xl transition-all duration-200 overflow-hidden ${
-                        userIsSharing && !isMe
-                          ? 'border-indigo-500/80 hover:border-indigo-400 hover:scale-[1.02] cursor-pointer ring-2 ring-indigo-500/20'
-                          : userSpeaking
-                          ? 'border-emerald-500 ring-4 ring-emerald-500/25 scale-[1.02]'
-                          : 'border-[#232537] hover:border-indigo-500/40'
-                      }`}
-                    >
-                      {/* Centered Avatar Icon / Image */}
+              {/* 3. Voice Participant Avatar Cards */}
+              {usersInRoom.map((user) => {
+                const isMe = user.id === currentUser?.id;
+                const speaking = isMe ? isSpeaking && !isMuted : false;
+
+                return (
+                  <div
+                    key={user.id}
+                    className={`aspect-video bg-[#130d21]/90 rounded-3xl border transition-all duration-150 flex flex-col items-center justify-center relative p-6 shadow-xl ${
+                      speaking
+                        ? 'border-violet-400 ring-2 ring-violet-500/30 shadow-violet-500/20'
+                        : 'border-violet-500/15 hover:border-violet-500/30'
+                    }`}
+                  >
+                    <div className="relative">
                       {user.avatarUrl ? (
                         <img
                           src={user.avatarUrl}
-                          alt={user.name}
-                          className={`w-24 h-24 sm:w-28 sm:h-28 rounded-full object-cover shadow-2xl transition-transform ${
-                            userSpeaking ? 'scale-105' : ''
+                          alt={user.displayName}
+                          className={`w-20 h-20 rounded-full object-cover shadow-xl transition-transform duration-150 ${
+                            speaking ? 'scale-110 ring-4 ring-violet-400/50' : ''
                           }`}
                         />
                       ) : (
                         <div
-                          className={`w-24 h-24 sm:w-28 sm:h-28 rounded-full flex items-center justify-center text-white shadow-2xl transition-transform ${
-                            userSpeaking ? 'scale-105' : ''
+                          className={`w-20 h-20 rounded-full flex items-center justify-center text-2xl font-black text-white shadow-xl transition-transform duration-150 ${
+                            speaking ? 'scale-110 ring-4 ring-violet-400/50' : ''
                           }`}
                           style={{ backgroundColor: user.avatarColor }}
                         >
-                          <svg className="w-12 h-12" fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                          </svg>
+                          {user.displayName.slice(0, 1).toUpperCase()}
                         </div>
                       )}
 
-                      {/* Screen Sharing Quick Join Overlay (Click to watch) */}
-                      {userIsSharing && !isMe && !isWatchingStream && (
-                        <div className="absolute inset-0 bg-indigo-950/75 backdrop-blur-xs flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity p-4 text-center">
-                          <div className="w-12 h-12 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-xl mb-2 group-hover:scale-110 transition-transform">
-                            <Play className="w-6 h-6 fill-current ml-0.5" />
-                          </div>
-                          <span className="text-xs font-bold text-white">Assistir Transmissão</span>
-                          <span className="text-[10px] text-indigo-300">Clique para entrar na stream de {user.name}</span>
+                      {user.isMuted && (
+                        <div className="absolute -bottom-1 -right-1 bg-rose-500 text-white p-1.5 rounded-full shadow-md border-2 border-[#130d21]">
+                          <MicOff className="w-3.5 h-3.5" />
                         </div>
                       )}
-
-                      {/* Bottom User Name & Status Badge */}
-                      <div className="absolute bottom-3 left-4 right-4 flex items-center justify-between bg-black/60 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-white/5">
-                        <div className="flex items-center gap-2 truncate">
-                          <span className="text-xs font-semibold text-slate-100 truncate">{user.name}</span>
-                          {isMe && (
-                            <span className="text-[10px] bg-indigo-600 text-white px-2 py-0.5 rounded font-medium">
-                              Você
-                            </span>
-                          )}
-                          {userIsSharing && (
-                            <span className="text-[10px] bg-rose-500/20 text-rose-400 px-1.5 py-0.2 rounded font-mono font-bold flex items-center gap-1">
-                              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
-                              AO VIVO
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          {user.isMuted && (
-                            <span title="Microfone mutado">
-                              <MicOff className="w-3.5 h-3.5 text-rose-400" />
-                            </span>
-                          )}
-                          {user.isDeafened && (
-                            <span title="Áudio desativado">
-                              <Headphones className="w-3.5 h-3.5 text-rose-400" />
-                            </span>
-                          )}
-                        </div>
-                      </div>
                     </div>
-                  );
-                })}
-              </div>
+
+                    <div className="mt-4 flex items-center gap-2">
+                      <span className="font-bold text-slate-100 text-sm">
+                        {user.displayName} {isMe && '(Você)'}
+                      </span>
+                    </div>
+
+                    <div className="text-[11px] text-violet-300/60 mt-0.5">
+                      {user.isScreenSharing ? 'Transmitindo tela' : user.isMuted ? 'Microfone mutado' : 'Conectado'}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
 
-        {/* Right Collapsible Side Chat Panel */}
-        {isChatOpen && (
-          <div className="w-84 bg-[#141520] border-l border-[#222432] flex flex-col justify-between overflow-hidden shadow-2xl">
-            {/* Header */}
-            <div className="h-12 px-4 border-b border-[#222432] flex items-center justify-between bg-[#171825]">
-              <span className="text-xs font-bold text-slate-200 flex items-center gap-2">
-                <MessageSquare className="w-4 h-4 text-indigo-400" />
-                <span>Chat de Texto da Chamada</span>
-              </span>
+        {/* Side Chat Drawer inside Voice Call */}
+        {showCallChat && (
+          <div className="w-80 bg-[#120b20] border-l border-violet-500/15 flex flex-col justify-between h-full">
+            <div className="p-3.5 border-b border-violet-500/15 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
+                <MessageSquare className="w-4 h-4 text-violet-400" />
+                <span>{isDMCall ? `Chat com ${targetDMFriend?.displayName}` : 'Chat da Sala'}</span>
+              </div>
               <button
-                onClick={() => setIsChatOpen(false)}
-                className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-white/5 transition cursor-pointer"
+                onClick={() => setShowCallChat(false)}
+                className="text-slate-400 hover:text-white text-xs cursor-pointer"
               >
-                <X className="w-4 h-4" />
+                ✕
               </button>
             </div>
 
-            {/* Messages Feed */}
-            <div className="flex-1 p-4 overflow-y-auto space-y-3">
-              {displayedMessages.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-center text-slate-500 space-y-2">
-                  <MessageSquare className="w-8 h-8 opacity-40" />
-                  <p className="text-xs">Nenhuma mensagem enviada nesta chamada ainda.</p>
+            <div className="flex-1 p-3 overflow-y-auto space-y-3">
+              {activeCallMessages.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-center text-xs text-slate-500 px-4">
+                  Envie mensagens ou fotos aqui enquanto conversa por voz!
                 </div>
               ) : (
-                displayedMessages.map((msg: any) => {
-                  const isMe = msg.userId === currentUser?.id || msg.fromUserId === currentUser?.id;
+                activeCallMessages.map((m: any) => {
+                  const isMe = (m.fromUserId || m.userId) === currentUser?.id;
                   const senderName = isMe
-                    ? currentUser?.name
-                    : msg.userName || (targetDMFriend ? targetDMFriend.name : 'Membro');
-                  const avatarColor = isMe
-                    ? currentUser?.avatarColor
-                    : msg.avatarColor || (targetDMFriend ? targetDMFriend.avatarColor : '#6366f1');
+                    ? currentUser?.displayName
+                    : m.userName || targetDMFriend?.displayName || 'Amigo';
 
                   return (
-                    <div key={msg.id} className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <div
-                          className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0"
-                          style={{ backgroundColor: avatarColor || '#6366f1' }}
-                        >
-                          {(senderName || '?').slice(0, 1).toUpperCase()}
+                    <div key={m.id} className="text-xs space-y-1 bg-[#19112b] p-2.5 rounded-2xl border border-violet-500/10">
+                      <div className="flex items-center justify-between">
+                        <span className={`font-bold ${isMe ? 'text-violet-400' : 'text-slate-200'}`}>
+                          {senderName}
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-mono">{m.timestamp}</span>
+                      </div>
+                      {m.text && <p className="text-slate-300 break-words select-text">{m.text}</p>}
+                      {m.attachment && (
+                        <div className="mt-1.5">
+                          {m.attachment.type === 'image' ? (
+                            <img
+                              src={m.attachment.url}
+                              alt={m.attachment.name}
+                              className="max-h-40 rounded-xl object-contain border border-violet-500/20"
+                            />
+                          ) : (
+                            <a
+                              href={m.attachment.url}
+                              download={m.attachment.name}
+                              className="flex items-center gap-2 bg-[#211638] p-2 rounded-xl text-violet-300 hover:text-white"
+                            >
+                              <FileText className="w-4 h-4 shrink-0" />
+                              <span className="truncate flex-1">{m.attachment.name}</span>
+                              <Download className="w-3.5 h-3.5 shrink-0" />
+                            </a>
+                          )}
                         </div>
-                        <span className="text-xs font-semibold text-slate-200">{senderName}</span>
-                        <span className="text-[10px] text-slate-500 font-mono">{msg.timestamp}</span>
-                      </div>
-                      <div className="pl-7 text-xs text-slate-300 break-words">
-                        {msg.text}
-                      </div>
+                      )}
                     </div>
                   );
                 })
               )}
-              <div ref={sideChatEndRef} />
+              <div ref={chatEndRef} />
             </div>
 
-            {/* Input Bar */}
-            <form onSubmit={handleSendSideChatMessage} className="p-3 border-t border-[#222432] bg-[#161723]">
-              <div className="flex items-center gap-2 bg-[#1b1c2a] border border-[#26283d] rounded-xl px-3 py-1.5 focus-within:border-indigo-500 transition">
+            <div className="p-3 border-t border-violet-500/15">
+              <input
+                ref={fileInputRef}
+                type="file"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+              {pendingAttachment && (
+                <div className="mb-2 bg-[#1a112c] p-2 rounded-xl flex items-center justify-between text-xs border border-violet-500/30">
+                  <span className="truncate text-slate-200 font-medium">{pendingAttachment.name}</span>
+                  <button onClick={() => setPendingAttachment(null)} className="text-rose-400 ml-2 cursor-pointer">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+              <form
+                onSubmit={handleChatSubmit}
+                className="flex items-center gap-1.5 bg-[#19112b] border border-violet-500/20 rounded-xl px-2.5 py-2"
+              >
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-slate-400 hover:text-violet-400 cursor-pointer"
+                >
+                  <Paperclip className="w-4 h-4" />
+                </button>
                 <input
                   type="text"
-                  value={chatInputText}
-                  onChange={(e) => setChatInputText(e.target.value)}
-                  placeholder="Conversar na call..."
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Mensagem na call..."
                   className="flex-1 bg-transparent text-xs text-white placeholder-slate-500 outline-none select-text"
                 />
                 <button
                   type="submit"
-                  disabled={!chatInputText.trim()}
-                  className="p-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded-lg transition cursor-pointer"
+                  className="p-1.5 bg-violet-600 hover:bg-violet-500 text-white rounded-lg cursor-pointer"
                 >
                   <Send className="w-3.5 h-3.5" />
                 </button>
-              </div>
-            </form>
+              </form>
+            </div>
           </div>
         )}
       </div>
 
-      {/* Bottom Floating Control Bar (Mute, Deafen, Screen Share, Quality, Hang up) */}
-      <div className="h-20 bg-transparent flex items-center justify-center px-6 z-20 pointer-events-none">
-        <div className="flex items-center gap-2.5 bg-[#141520]/80 backdrop-blur-md p-2 rounded-2xl border border-[#232537] shadow-2xl pointer-events-auto">
-          {/* Mute Button */}
+      {/* Bottom Floating Control Dock */}
+      <div className="pb-6 pt-2 flex justify-center z-10">
+        <div className="bg-[#150e26]/95 backdrop-blur-xl border border-violet-500/25 px-6 py-3 rounded-2xl shadow-2xl shadow-violet-950/60 flex items-center gap-4">
           <button
             onClick={onToggleMute}
-            className={`p-3 rounded-xl transition-all cursor-pointer ${
+            className={`p-3.5 rounded-xl font-semibold transition flex items-center gap-2 cursor-pointer ${
               isMuted
-                ? 'bg-[#f43f5e] hover:bg-[#e11d48] text-white shadow-lg shadow-rose-500/25'
-                : 'bg-[#1e1f2f] hover:bg-[#282a3d] text-slate-200'
+                ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30 hover:bg-rose-500/30'
+                : 'bg-[#211738] text-slate-200 hover:bg-[#2b1e47]'
             }`}
-            title={isMuted ? 'Desmutar Microfone' : 'Mutar Microfone'}
+            title={isMuted ? 'Ativar Microfone' : 'Mutar Microfone'}
           >
             {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
           </button>
 
-          {/* Deafen Button */}
           <button
             onClick={onToggleDeafen}
-            className={`p-3 rounded-xl transition-all cursor-pointer ${
+            className={`p-3.5 rounded-xl font-semibold transition flex items-center gap-2 cursor-pointer ${
               isDeafened
-                ? 'bg-[#f43f5e] hover:bg-[#e11d48] text-white shadow-lg shadow-rose-500/25'
-                : 'bg-[#1e1f2f] hover:bg-[#282a3d] text-slate-200'
+                ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30 hover:bg-rose-500/30'
+                : 'bg-[#211738] text-slate-200 hover:bg-[#2b1e47]'
             }`}
-            title={isDeafened ? 'Reativar Áudio da Chamada' : 'Ensurdecer'}
+            title={isDeafened ? 'Ativar Áudio' : 'Desativar Áudio'}
           >
             <Headphones className="w-5 h-5" />
           </button>
 
-          {/* Screen Share Button */}
           <button
             onClick={onToggleScreenShare}
-            className={`flex items-center gap-2 px-5 py-3 rounded-xl font-semibold text-sm transition-all cursor-pointer ${
+            className={`px-5 py-3.5 rounded-xl font-bold text-sm transition flex items-center gap-2 cursor-pointer ${
               isScreenSharing
-                ? 'bg-[#f43f5e] hover:bg-[#e11d48] text-white shadow-lg shadow-rose-500/25'
-                : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/30'
+                ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white shadow-lg shadow-violet-600/30 hover:from-violet-500 hover:to-fuchsia-500'
+                : 'bg-[#211738] text-slate-200 hover:bg-[#2b1e47]'
             }`}
-            title={isScreenSharing ? 'Parar de Compartilhar' : 'Transmitir Tela/Jogo'}
           >
-            {isScreenSharing ? (
-              <>
-                <MonitorOff className="w-5 h-5" />
-                <span>Parar Tela</span>
-              </>
-            ) : (
-              <>
-                <Monitor className="w-5 h-5" />
-                <span>Transmitir Tela</span>
-              </>
-            )}
+            <Monitor className="w-5 h-5" />
+            <span>{isScreenSharing ? 'Parar Transmissão' : 'Transmitir Tela'}</span>
           </button>
 
-          {/* Leave Voice Button */}
+          <div className="w-[1px] h-8 bg-violet-500/20 mx-1" />
+
           <button
             onClick={onLeaveVoice}
-            className="p-3 bg-[#f43f5e] hover:bg-[#e11d48] text-white rounded-xl transition shadow-lg shadow-rose-500/25 cursor-pointer"
-            title="Desconectar da Chamada"
+            className="px-5 py-3.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-sm shadow-lg shadow-rose-600/30 transition flex items-center gap-2 cursor-pointer"
           >
             <PhoneOff className="w-5 h-5" />
+            <span>Desconectar</span>
           </button>
         </div>
       </div>
@@ -613,14 +530,39 @@ export const VoiceRoom: React.FC<VoiceRoomProps> = ({
   );
 };
 
-const AudioPlayer: React.FC<{ stream: MediaStream; isDeafened: boolean }> = ({ stream, isDeafened }) => {
+const StreamVideo: React.FC<{ stream: MediaStream; muted?: boolean }> = ({ stream, muted = false }) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+    if (videoEl.srcObject !== stream) {
+      videoEl.srcObject = stream;
+    }
+    videoEl.muted = muted;
+    videoEl.play().catch(() => {});
+  }, [stream, muted]);
+
+  return (
+    <video
+      ref={videoRef}
+      autoPlay
+      playsInline
+      muted={muted}
+      className="w-full h-full object-contain bg-black"
+    />
+  );
+};
+
+const RemoteAudioPlayer: React.FC<{ stream: MediaStream; muted: boolean }> = ({ stream, muted }) => {
   const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
     if (audioRef.current) {
       audioRef.current.srcObject = stream;
+      audioRef.current.play().catch(() => {});
     }
   }, [stream]);
 
-  return <audio ref={audioRef} autoPlay playsInline muted={isDeafened} />;
+  return <audio ref={audioRef} autoPlay muted={muted} className="hidden" />;
 };
