@@ -2,7 +2,13 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import cors from 'cors';
-import { loadDB, saveDB, DBUser, DBServer, DBChannel, DBFriendship, DBMessage, DBDMMessage } from './db.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { initDatabase, loadDB, saveDB, DBUser, DBServer, DBChannel, DBFriendship, DBMessage, DBDMMessage, ServerRole } from './db.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors({ origin: '*' }));
@@ -270,6 +276,15 @@ function broadcastServerUpdated(server: DBServer) {
   }
 }
 
+app.get('/download/windows', (req, res) => {
+  const exePath = path.resolve(__dirname, '..', '..', 'client', 'release', 'Janjacord-Windows.exe');
+  if (fs.existsSync(exePath)) {
+    return res.download(exePath, 'Janjacord-Windows.exe');
+  }
+  // Se estiver no Render (que só roda a pasta server), redireciona para a release pública no GitHub
+  res.redirect('https://github.com/ErickSantana10/janjacord/releases/download/v1.0.0/Janjacord-Windows.exe');
+});
+
 app.get('/api/health', (req, res) => {
   const db = loadDB();
   res.json({
@@ -447,7 +462,9 @@ io.on('connection', (socket: Socket) => {
 
     const friends = getUserFriends(session.userId, db);
     friends.forEach((f) => {
-      updateUserFriends(f.friend.id);
+      if (f.friend) {
+        updateUserFriends(f.friend.id);
+      }
     });
 
     broadcastOnlineList();
@@ -568,8 +585,8 @@ io.on('connection', (socket: Socket) => {
         io.to(sId).emit('dm:incoming-call', {
           fromUser: {
             id: caller.id,
-            username: caller.username,
-            displayName: caller.displayName,
+            username: caller.username || caller.name,
+            displayName: caller.displayName || caller.name,
             avatarColor: caller.avatarColor,
             avatarUrl: caller.avatarUrl,
           },
@@ -1166,7 +1183,7 @@ io.on('connection', (socket: Socket) => {
       serverId,
       channelId,
       userId: user.id,
-      userName: user.displayName || user.username,
+      userName: user.displayName || user.username || user.name,
       avatarColor: user.avatarColor,
       avatarUrl: user.avatarUrl,
       text: (text || '').trim(),
@@ -1214,7 +1231,7 @@ io.on('connection', (socket: Socket) => {
         return {
           id: s.userId,
           socketId: s.socketId,
-          name: u?.displayName || u?.username || 'Gamer',
+          name: u?.displayName || u?.username || u?.name || 'Gamer',
           avatarColor: u?.avatarColor || '#6366f1',
           avatarUrl: u?.avatarUrl,
           isMuted: s.isMuted,
@@ -1233,7 +1250,7 @@ io.on('connection', (socket: Socket) => {
       peer: {
         id: session.userId,
         socketId: socket.id,
-        name: u?.displayName || u?.username || 'Gamer',
+        name: u?.displayName || u?.username || u?.name || 'Gamer',
         avatarColor: u?.avatarColor || '#6366f1',
         avatarUrl: u?.avatarUrl,
         isMuted: session.isMuted,
@@ -1676,9 +1693,20 @@ io.on('connection', (socket: Socket) => {
 });
 
 const PORT = process.env.PORT || 3001;
-httpServer.listen(PORT, () => {
-  console.log(`=========================================`);
-  console.log(`🚀 Janjacord Server rodando na porta ${PORT}`);
-  console.log(`✨ Canais dinâmicos, DM calls e perfis ativos`);
-  console.log(`=========================================`);
-});
+
+async function startServer() {
+  try {
+    await initDatabase();
+  } catch (e: any) {
+    console.error('Falha na inicialização do banco Supabase:', e.message);
+  }
+
+  httpServer.listen(PORT, () => {
+    console.log(`=========================================`);
+    console.log(`🚀 Janjacord Server rodando na porta ${PORT}`);
+    console.log(`✨ Canais dinâmicos, DM calls e perfis ativos`);
+    console.log(`=========================================`);
+  });
+}
+
+startServer();

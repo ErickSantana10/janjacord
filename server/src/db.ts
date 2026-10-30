@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import pg from 'pg';
+const { Pool } = pg;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,6 +16,8 @@ export interface DBUser {
   avatarUrl?: string;
   bio?: string;
   createdAt: string;
+  username?: string;
+  displayName?: string;
 }
 
 export interface DBChannel {
@@ -113,6 +117,31 @@ const INITIAL_DB: DatabaseSchema = {
   dmMessages: [],
 };
 
+// Configuração do Supabase PostgreSQL
+const SUPABASE_DB_URL =
+  process.env.DATABASE_URL ||
+  'postgresql://postgres.qboxsieiqfnkvlracktc:3Kp34%2B_pxBBV%2Byb@aws-0-us-east-2.pooler.supabase.com:6543/postgres';
+
+let pool: pg.Pool | null = null;
+try {
+  pool = new Pool({
+    connectionString: SUPABASE_DB_URL,
+    ssl: { rejectUnauthorized: false },
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
+  });
+  pool.on('error', (err) => {
+    console.error('[Supabase Pool Error]:', err.message);
+  });
+} catch (e) {
+  console.warn('[Supabase] Falha ao instanciar Pool:', e);
+}
+
+// Cache local em memória para leitura ultrarrápida (latência zero no Socket.IO)
+let memoryCache: DatabaseSchema | null = null;
+let saveDebounceTimer: NodeJS.Timeout | null = null;
+
 function ensureDataDir() {
   const dir = path.dirname(DB_FILE);
   if (!fs.existsSync(dir)) {
@@ -123,7 +152,7 @@ function ensureDataDir() {
   }
 }
 
-export function loadDB(): DatabaseSchema {
+function loadLocalFile(): DatabaseSchema {
   ensureDataDir();
   try {
     const raw = fs.readFileSync(DB_FILE, 'utf-8');
@@ -131,16 +160,87 @@ export function loadDB(): DatabaseSchema {
     if (!parsed.dmMessages) parsed.dmMessages = [];
     return parsed as DatabaseSchema;
   } catch (err) {
-    console.error('[DB] Erro ao carregar banco de dados:', err);
+    console.error('[DB Local] Erro ao carregar arquivo:', err);
     return INITIAL_DB;
   }
 }
 
-export function saveDB(data: DatabaseSchema): void {
+function saveLocalFile(data: DatabaseSchema): void {
   ensureDataDir();
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
   } catch (err) {
-    console.error('[DB] Erro ao salvar banco de dados:', err);
+    console.error('[DB Local] Erro ao salvar arquivo:', err);
   }
+}
+
+// Inicializa a conexão com o Supabase e sincroniza no boot
+export async function initDatabase(): Promise<void> {
+  // Carrega inicialmente do disco como fallback rápido
+  memoryCache = loadLocalFile();
+
+  if (!pool) return;
+
+  try {
+    // Garante que a tabela existe
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS janjacord_store (
+        id VARCHAR(50) PRIMARY KEY,
+        data JSONB NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `);
+
+    // Busca dados do Supabase
+    const res = await pool.query("SELECT data FROM janjacord_store WHERE id = 'main';");
+    if (res.rows.length > 0 && res.rows[0].data) {
+      const remoteData = res.rows[0].data as DatabaseSchema;
+      if (!remoteData.dmMessages) remoteData.dmMessages = [];
+      memoryCache = remoteData;
+      saveLocalFile(remoteData);
+      console.log(`[Supabase DB] Carregado com sucesso! ${memoryCache.users.length} usuários, ${memoryCache.servers.length} servidores.`);
+    } else {
+      // Se a tabela estiver vazia na nuvem, faz o seed com os dados locais
+      await pool.query(`
+        INSERT INTO janjacord_store (id, data, updated_at)
+        VALUES ('main', $1, NOW())
+        ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW();
+      `, [JSON.stringify(memoryCache)]);
+      console.log('[Supabase DB] Banco inicializado com os dados locais.');
+    }
+  } catch (err: any) {
+    console.error('[Supabase DB] Erro de inicialização (usando fallback local):', err.message);
+  }
+}
+
+// Leitura síncrona instantânea (retorna da memória)
+export function loadDB(): DatabaseSchema {
+  if (!memoryCache) {
+    memoryCache = loadLocalFile();
+  }
+  return memoryCache;
+}
+
+// Grava imediatamente no cache de memória, salva localmente e sincroniza no Supabase
+export function saveDB(data: DatabaseSchema): void {
+  memoryCache = data;
+  saveLocalFile(data);
+
+  // Debounce para gravar no Supabase sem sobrecarregar a conexão
+  if (saveDebounceTimer) {
+    clearTimeout(saveDebounceTimer);
+  }
+
+  saveDebounceTimer = setTimeout(async () => {
+    if (!pool) return;
+    try {
+      await pool.query(`
+        INSERT INTO janjacord_store (id, data, updated_at)
+        VALUES ('main', $1, NOW())
+        ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW();
+      `, [JSON.stringify(data)]);
+    } catch (err: any) {
+      console.error('[Supabase DB] Erro ao sincronizar dados na nuvem:', err.message);
+    }
+  }, 100);
 }
