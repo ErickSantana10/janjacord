@@ -91,7 +91,8 @@ export const App: React.FC = () => {
   }, [activeChannel]);
 
   useEffect(() => {
-    const socket = io();
+    const serverUrl = import.meta.env.VITE_SERVER_URL || '';
+    const socket = io(serverUrl);
     socketRef.current = socket;
 
     const rtc = new WebRTCManager(socket);
